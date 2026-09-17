@@ -1,0 +1,28 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage artifacts
+*.test
+*.out
+*.prof
+
+# Delve debugger temporary binaries
+__debug_bin*
+
+# Go workspace (local development)
+go.work
+go.work.sum
+
+# IDEs & agents
+.agents/
+.idea/
+.vscode/
+*.code-workspace
+
+# OS metadata
+Thumbs.db
+[Dd]esktop.ini

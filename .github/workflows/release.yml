@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    env:
+      CGO_ENABLED: '0'
+      GOOS: 'windows'
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Vet code
+        run: go vet ./...
+
+      - name: Build Windows binary
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.goarch }}" = "amd64" ]; then
+            BIN_NAME="procmem.exe"
+          else
+            BIN_NAME="procmem-${{ matrix.goarch }}.exe"
+          fi
+          go build -trimpath -ldflags="-s -w" -o "dist/$BIN_NAME" .
+          if [ "$BIN_NAME" != "procmem.exe" ]; then
+            cp "dist/$BIN_NAME" dist/procmem.exe
+          fi
+          cd dist
+          zip -9 "procmem-${{ github.ref_name }}-windows-${{ matrix.goarch }}.zip" procmem.exe ../README.md ../LICENSE ../CHANGELOG.md
+          if [ "$BIN_NAME" != "procmem.exe" ]; then
+            rm procmem.exe
+          fi
+          sha256sum "procmem-${{ github.ref_name }}-windows-${{ matrix.goarch }}.zip" > "procmem-${{ github.ref_name }}-windows-${{ matrix.goarch }}.zip.sha256"
+          sha256sum "$BIN_NAME" > "$BIN_NAME.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: assets-${{ matrix.goarch }}
+          path: dist/*
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Prepare checksums
+        working-directory: release-assets
+        run: |
+          cat *.sha256 > checksums.txt
+          rm -f *.sha256
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
