@@ -15,13 +15,14 @@
 // restricts descendants to the root's exact name; anything else, including
 // an explicit *, matches by substring.
 //
-// Usage: procmem [/a | /ec | /f] [/e] [/cpu] [/s] <name>...
+// Usage: procmem [/a | /ec | /f] [/e] [/cpu] [/gpu] [/s] <name>...
 //
 //	/a   /all      count all descendants regardless of name (default)
 //	/ec            exact root name (implies /e) and exact-name children
 //	/f   /flat     one row per matching process; no grouping, no rollup
 //	/e   /exact    input is an exact process name, .exe optional
 //	/cpu /c        show total CPU time
+//	/gpu /g        show Dedicated and Shared GPU memory
 //	/s   /short    omit the Names column
 //	/h   /?  /help show this help
 package main
@@ -50,6 +51,8 @@ type procInfo struct {
 	ws      uint64 // total working set, bytes
 	commit  uint64 // PagefileUsage (= Task Manager "Commit size"), bytes
 	cpu     uint64 // total CPU time (UserTime + KernelTime) in 100ns units
+	gpuDed  uint64 // dedicated GPU memory, bytes
+	gpuShr  uint64 // shared GPU memory, bytes
 }
 
 // Input is an exact process name when forced via /e, or when it ends in
@@ -88,7 +91,7 @@ func parseName(raw string, forceExact bool) matcher {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /ec | /f] [/e] [/cpu] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
+	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /ec | /f] [/e] [/cpu] [/gpu] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
 	fmt.Fprint(w, "\nPer root instance of <name>: combined RAM (private working set =\n"+
 		"Task Manager \"Memory\") and commit (pagefile usage = Task Manager\n"+
 		"\"Commit size\") of that instance plus its descendant processes, with the\n"+
@@ -100,6 +103,7 @@ func printUsage(w io.Writer) {
 		"  /f   /flat     one row per matching process; no grouping, no rollup\n"+
 		"  /e   /exact    <name> is an exact process name, .exe suffix optional\n"+
 		"  /cpu /c        show total CPU time (User + Kernel)\n"+
+		"  /gpu /g        show Dedicated and Shared GPU memory\n"+
 		"  /s   /short    omit the Names column\n"+
 		"  /h   /?  /help show this help\n\n"+
 		"Matching: input ending in .exe is exact; anything else, or an explicit\n"+
@@ -114,6 +118,7 @@ func main() {
 		flat       bool
 		short      bool
 		showCPU    bool
+		showGPU    bool
 		positional []string
 	)
 	for _, a := range os.Args[1:] {
@@ -128,6 +133,8 @@ func main() {
 			exactInput = true
 		case "/cpu", "/c":
 			showCPU = true
+		case "/gpu", "/g":
+			showGPU = true
 		case "/s", "/short":
 			short = true
 		case "/h", "/?", "/help":
@@ -182,12 +189,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	if showGPU {
+		gpuDed, gpuShr, err := queryGPUMemory()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "procmem: GPU memory query failed: %v\n", err)
+			os.Exit(1)
+		}
+		for pid, info := range procs {
+			if ded, ok := gpuDed[pid]; ok {
+				info.gpuDed = ded
+			}
+			if shr, ok := gpuShr[pid]; ok {
+				info.gpuShr = shr
+			}
+			procs[pid] = info
+		}
+	}
+
 	type row struct {
-		root       uint32
-		procs      int
-		ws, commit uint64
-		cpu        uint64
-		names      map[string]bool
+		root           uint32
+		procs          int
+		ws, commit     uint64
+		cpu            uint64
+		gpuDed, gpuShr uint64
+		names          map[string]bool
 	}
 	var rows []row
 
@@ -200,6 +225,8 @@ func main() {
 			r.names = map[string]bool{strings.ToLower(procs[pid].name): true}
 			r.ws, r.commit, r.procs = procs[pid].ws, procs[pid].commit, 1
 			r.cpu = procs[pid].cpu
+			r.gpuDed = procs[pid].gpuDed
+			r.gpuShr = procs[pid].gpuShr
 			rows = append(rows, r)
 		}
 	} else {
@@ -287,6 +314,8 @@ func main() {
 				r.ws += procs[pid].ws
 				r.commit += procs[pid].commit
 				r.cpu += procs[pid].cpu
+				r.gpuDed += procs[pid].gpuDed
+				r.gpuShr += procs[pid].gpuShr
 				r.procs++
 				stack = append(stack, kids[pid]...)
 			}
@@ -306,33 +335,31 @@ func main() {
 	w := tabwriter.NewWriter(&numBuf, 0, 0, 2, ' ', tabwriter.AlignRight)
 	if short {
 		if flat {
-			if showCPU {
-				fmt.Fprintln(w, "PID\tRAM MB\tCommit MB\tCPU Time\t")
-			} else {
-				fmt.Fprintln(w, "PID\tRAM MB\tCommit MB\t")
-			}
+			fmt.Fprint(w, "PID\tRAM MB\tCommit MB\t")
 		} else {
-			if showCPU {
-				fmt.Fprintln(w, "RootPID\tProcs\tRAM MB\tCommit MB\tCPU Time\t")
-			} else {
-				fmt.Fprintln(w, "RootPID\tProcs\tRAM MB\tCommit MB\t")
-			}
+			fmt.Fprint(w, "RootPID\tProcs\tRAM MB\tCommit MB\t")
 		}
+		if showCPU {
+			fmt.Fprint(w, "CPU Time\t")
+		}
+		if showGPU {
+			fmt.Fprint(w, "GPU Ded\tGPU Shr\t")
+		}
+		fmt.Fprintln(w)
 		for _, r := range rows {
 			ram, commit := commasF(mb(r.ws)), commasF(mb(r.commit))
 			if flat {
-				if showCPU {
-					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t\n", r.root, ram, commit, formatCPU(r.cpu))
-				} else {
-					fmt.Fprintf(w, "%d\t%s\t%s\t\n", r.root, ram, commit)
-				}
+				fmt.Fprintf(w, "%d\t%s\t%s\t", r.root, ram, commit)
 			} else {
-				if showCPU {
-					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t\n", r.root, commasI(r.procs), ram, commit, formatCPU(r.cpu))
-				} else {
-					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t\n", r.root, commasI(r.procs), ram, commit)
-				}
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t", r.root, commasI(r.procs), ram, commit)
 			}
+			if showCPU {
+				fmt.Fprintf(w, "%s\t", formatCPU(r.cpu))
+			}
+			if showGPU {
+				fmt.Fprintf(w, "%s\t%s\t", commasF(mb(r.gpuDed)), commasF(mb(r.gpuShr)))
+			}
+			fmt.Fprintln(w)
 		}
 	} else {
 		if flat {
@@ -358,12 +385,16 @@ func main() {
 		}
 	} else {
 		type rowDisp struct {
-			namesStr string
-			cpuStr   string
+			namesStr  string
+			cpuStr    string
+			gpuDedStr string
+			gpuShrStr string
 		}
 		disps := make([]rowDisp, len(rows))
 		maxNamesLen := len("Names")
 		maxCPULen := len("CPU Time")
+		maxGPUDedLen := len("GPU Ded")
+		maxGPUShrLen := len("GPU Shr")
 		for i, r := range rows {
 			rootName := strings.ToLower(procs[r.root].name)
 			var otherNames []string
@@ -393,39 +424,72 @@ func main() {
 					maxCPULen = len(disps[i].cpuStr)
 				}
 			}
+			if showGPU {
+				disps[i].gpuDedStr = commasF(mb(r.gpuDed))
+				if len(disps[i].gpuDedStr) > maxGPUDedLen {
+					maxGPUDedLen = len(disps[i].gpuDedStr)
+				}
+				disps[i].gpuShrStr = commasF(mb(r.gpuShr))
+				if len(disps[i].gpuShrStr) > maxGPUShrLen {
+					maxGPUShrLen = len(disps[i].gpuShrStr)
+				}
+			}
 		}
 
-		if showCPU {
-			fmt.Printf("%s  %-*s  %*s\n", lines[0], maxNamesLen, "Names", maxCPULen, "CPU Time")
-			for i := range rows {
-				fmt.Printf("%s  %-*s  %*s\n", lines[i+1], maxNamesLen, disps[i].namesStr, maxCPULen, disps[i].cpuStr)
-			}
-		} else {
+		if !showCPU && !showGPU {
 			fmt.Printf("%s  Names\n", lines[0])
 			for i := range rows {
 				fmt.Printf("%s  %s\n", lines[i+1], disps[i].namesStr)
+			}
+		} else {
+			var header bytes.Buffer
+			fmt.Fprintf(&header, "%s  %-*s", lines[0], maxNamesLen, "Names")
+			if showCPU {
+				fmt.Fprintf(&header, "  %*s", maxCPULen, "CPU Time")
+			}
+			if showGPU {
+				fmt.Fprintf(&header, "  %*s  %*s", maxGPUDedLen, "GPU Ded", maxGPUShrLen, "GPU Shr")
+			}
+			fmt.Println(header.String())
+
+			for i := range rows {
+				var rowBuf bytes.Buffer
+				fmt.Fprintf(&rowBuf, "%s  %-*s", lines[i+1], maxNamesLen, disps[i].namesStr)
+				if showCPU {
+					fmt.Fprintf(&rowBuf, "  %*s", maxCPULen, disps[i].cpuStr)
+				}
+				if showGPU {
+					fmt.Fprintf(&rowBuf, "  %*s  %*s", maxGPUDedLen, disps[i].gpuDedStr, maxGPUShrLen, disps[i].gpuShrStr)
+				}
+				fmt.Println(rowBuf.String())
 			}
 		}
 	}
 
 	var totProcs int
-	var totWS, totCommit, totCPU uint64
+	var totWS, totCommit, totCPU, totGPUDed, totGPUShr uint64
 	for _, r := range rows {
 		totProcs += r.procs
 		totWS += r.ws
 		totCommit += r.commit
 		totCPU += r.cpu
+		totGPUDed += r.gpuDed
+		totGPUShr += r.gpuShr
 	}
 	cpuSummary := ""
 	if showCPU {
 		cpuSummary = fmt.Sprintf(", CPU %s", formatCPU(totCPU))
 	}
+	gpuSummary := ""
+	if showGPU {
+		gpuSummary = fmt.Sprintf(", GPU ded %s MB, shared %s MB", commasF(mb(totGPUDed)), commasF(mb(totGPUShr)))
+	}
 	if flat {
-		fmt.Printf("=> %s process(es) matching '%s': RAM %s MB, commit %s MB%s\n",
-			commasI(totProcs), targetStr, commasF(mb(totWS)), commasF(mb(totCommit)), cpuSummary)
+		fmt.Printf("=> %s process(es) matching '%s': RAM %s MB, commit %s MB%s%s\n",
+			commasI(totProcs), targetStr, commasF(mb(totWS)), commasF(mb(totCommit)), cpuSummary, gpuSummary)
 	} else {
-		fmt.Printf("=> %d root(s), %s process(es) matching '%s': RAM %s MB, commit %s MB%s\n",
-			len(rows), commasI(totProcs), targetStr, commasF(mb(totWS)), commasF(mb(totCommit)), cpuSummary)
+		fmt.Printf("=> %d root(s), %s process(es) matching '%s': RAM %s MB, commit %s MB%s%s\n",
+			len(rows), commasI(totProcs), targetStr, commasF(mb(totWS)), commasF(mb(totCommit)), cpuSummary, gpuSummary)
 	}
 }
 
@@ -546,3 +610,111 @@ func formatCPU(ticks uint64) string {
 	}
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
+
+var (
+	modpdh                           = windows.NewLazySystemDLL("pdh.dll")
+	procPdhOpenQueryW                = modpdh.NewProc("PdhOpenQueryW")
+	procPdhAddEnglishCounterW        = modpdh.NewProc("PdhAddEnglishCounterW")
+	procPdhCollectQueryData          = modpdh.NewProc("PdhCollectQueryData")
+	procPdhGetFormattedCounterArrayW = modpdh.NewProc("PdhGetFormattedCounterArrayW")
+	procPdhCloseQuery                = modpdh.NewProc("PdhCloseQuery")
+)
+
+const (
+	pdhFmtLarge = 0x00000400
+	pdhMoreData = 0x800007D2
+)
+
+type pdhCounterValueItem struct {
+	szName   *uint16
+	cStatus  uint32
+	largeVal int64
+}
+
+// queryGPUMemory queries dedicated and shared GPU memory per process (in bytes)
+// via PDH Performance Counters (\GPU Process Memory(*)\Dedicated Usage and Shared Usage).
+func queryGPUMemory() (dedicated, shared map[uint32]uint64, err error) {
+	if err := modpdh.Load(); err != nil {
+		return nil, nil, fmt.Errorf("pdh.dll unavailable: %w", err)
+	}
+
+	var hQuery uintptr
+	if r1, _, _ := procPdhOpenQueryW.Call(0, 0, uintptr(unsafe.Pointer(&hQuery))); r1 != 0 {
+		return nil, nil, fmt.Errorf("PdhOpenQuery error 0x%08x", uint32(r1))
+	}
+	defer procPdhCloseQuery.Call(hQuery)
+
+	var hDedicated, hShared uintptr
+	pDedicated, _ := windows.UTF16PtrFromString(`\GPU Process Memory(*)\Dedicated Usage`)
+	pShared, _ := windows.UTF16PtrFromString(`\GPU Process Memory(*)\Shared Usage`)
+
+	if r1, _, _ := procPdhAddEnglishCounterW.Call(hQuery, uintptr(unsafe.Pointer(pDedicated)), 0, uintptr(unsafe.Pointer(&hDedicated))); r1 != 0 {
+		return nil, nil, fmt.Errorf("failed to add GPU Dedicated counter: 0x%08x", uint32(r1))
+	}
+	if r1, _, _ := procPdhAddEnglishCounterW.Call(hQuery, uintptr(unsafe.Pointer(pShared)), 0, uintptr(unsafe.Pointer(&hShared))); r1 != 0 {
+		return nil, nil, fmt.Errorf("failed to add GPU Shared counter: 0x%08x", uint32(r1))
+	}
+
+	if r1, _, _ := procPdhCollectQueryData.Call(hQuery); r1 != 0 {
+		return nil, nil, fmt.Errorf("PdhCollectQueryData error 0x%08x", uint32(r1))
+	}
+
+	readCounter := func(hCounter uintptr) (map[uint32]uint64, error) {
+		var bufSize, itemCount uint32
+		r1, _, _ := procPdhGetFormattedCounterArrayW.Call(
+			hCounter,
+			pdhFmtLarge,
+			uintptr(unsafe.Pointer(&bufSize)),
+			uintptr(unsafe.Pointer(&itemCount)),
+			0,
+		)
+		if r1 != 0 && uint32(r1) != pdhMoreData {
+			return nil, fmt.Errorf("PdhGetFormattedCounterArray size error 0x%08x", uint32(r1))
+		}
+		if bufSize == 0 || itemCount == 0 {
+			return make(map[uint32]uint64), nil
+		}
+
+		buf := make([]byte, bufSize)
+		r1, _, _ = procPdhGetFormattedCounterArrayW.Call(
+			hCounter,
+			pdhFmtLarge,
+			uintptr(unsafe.Pointer(&bufSize)),
+			uintptr(unsafe.Pointer(&itemCount)),
+			uintptr(unsafe.Pointer(&buf[0])),
+		)
+		if r1 != 0 {
+			return nil, fmt.Errorf("PdhGetFormattedCounterArray error 0x%08x", uint32(r1))
+		}
+
+		res := make(map[uint32]uint64)
+		itemSize := unsafe.Sizeof(pdhCounterValueItem{})
+		for i := uint32(0); i < itemCount; i++ {
+			item := (*pdhCounterValueItem)(unsafe.Pointer(&buf[uintptr(i)*itemSize]))
+			name := windows.UTF16PtrToString(item.szName)
+			if strings.HasPrefix(name, "pid_") {
+				rest := name[4:]
+				idx := strings.IndexByte(rest, '_')
+				if idx > 0 {
+					if pid64, err := strconv.ParseUint(rest[:idx], 10, 32); err == nil {
+						if item.cStatus == 0 && item.largeVal > 0 {
+							res[uint32(pid64)] += uint64(item.largeVal)
+						}
+					}
+				}
+			}
+		}
+		return res, nil
+	}
+
+	ded, err := readCounter(hDedicated)
+	if err != nil {
+		return nil, nil, err
+	}
+	shr, err := readCounter(hShared)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ded, shr, nil
+}
+

@@ -23,7 +23,7 @@ C:\> procmem notepad
 ## Usage
 
 ```
-procmem [/a | /ec | /f] [/e] [/cpu] [/s] <name>...
+procmem [/a | /ec | /f] [/e] [/cpu] [/gpu] [/s] <name>...
 
   /a   /all      count all descendants regardless of name (default)
   /ec            exact root name (implies /e); count only descendants
@@ -31,6 +31,7 @@ procmem [/a | /ec | /f] [/e] [/cpu] [/s] <name>...
   /f   /flat     one row per matching process; no grouping, no rollup
   /e   /exact    <name> is an exact process name, .exe suffix optional
   /cpu /c        show total CPU time (User + Kernel)
+  /gpu /g        show Dedicated and Shared GPU memory
   /s   /short    omit the Names column
   /h   /?  /help show this help
 ```
@@ -53,13 +54,17 @@ for quick access from any Command Prompt or PowerShell window.
 - `/e steam` — force exact matching for suffix-less input (`.exe` is
   matched or appended automatically, also matching extensionless system
   processes like `System` or `Registry`).
-- `/ec steam` — implies `/e` and additionally counts only descendants
-  named exactly like the root: exactly one `steam.exe`, alone.
+- `/ec explorer` — implies `/e` and additionally counts only descendants
+  named exactly like the root: counts `explorer.exe` instances alone,
+  ignoring differently-named child processes.
 - `/f discord` — flat listing: every matching process as its own row, no
   grouping and no descendant rollup.
 - `/cpu firefox` (or `/c`) — appends a `CPU Time` column reporting total
   execution time (user + kernel across all threads) formatted as `[D:]HH:MM:SS`.
-- `chrome steam` — matches any process whose name matches either query;
+- `/gpu msedge` (or `/g`) — appends `GPU Ded` and `GPU Shr` columns
+  reporting dedicated and shared GPU memory in MiB.
+- `code note` — matches any process whose name matches either query
+  (e.g. VS Code and Notepad, but also OpenCode and Notepad4);
   roots are aggregated and sorted together into a single table.
 
 A process becomes a group's *root* when its parent does not match, is
@@ -77,6 +82,8 @@ trees attached to their true topmost ancestor.
 | Commit MB | commit charge of the group (psapi `PagefileUsage` = Task Manager's "Commit size") |
 | Names | unique process names in the group (hidden by `/s`), with the root name listed first; names with spaces are quoted |
 | CPU Time | (optional: `/cpu` or `/c`) total CPU execution time across all threads in `[D:]HH:MM:SS` |
+| GPU Ded | (optional: `/gpu` or `/g`) dedicated GPU memory in MiB |
+| GPU Shr | (optional: `/gpu` or `/g`) shared system GPU memory in MiB |
 
 Rows are sorted by commit, highest first.
 

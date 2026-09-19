@@ -37,7 +37,7 @@ optional additional metrics).
   consulted. Services and system processes (`svchost.exe`, `WmiPrvSE.exe`,
   `System`) are fully readable from a non-elevated token.
 - **Multiple process targets**: Multiple names can be passed (e.g.
-  `procmem chrome steam`). Each name is parsed with its own matching rules
+  `procmem code note`). Each name is parsed with its own matching rules
   (exact vs substring). In tree mode, `rootOf` walks up ancestors matching
   *any* of the queries (Option A: shared root group), preventing fragmented
   or duplicated subtrees if one queried process spawned another.
@@ -89,6 +89,21 @@ optional additional metrics).
   threads of each process, queried directly from `SYSTEM_PROCESS_INFORMATION`.
   When rolled up across a tree, it represents aggregate CPU consumption. Formatted
   as `[D:]HH:MM:SS` (hours zero-padded, days prefixed only when $\ge 24$ hours).
+
+## GPU memory metrics
+
+- **Dedicated GPU Memory (`\GPU Process Memory(*)\Dedicated Usage`)**:
+  Video RAM allocated on the graphics adapter for exclusive use by the
+  process, matching Task Manager's "Dedicated GPU memory" column.
+- **Shared GPU Memory (`\GPU Process Memory(*)\Shared Usage`)**:
+  Host system RAM allocated by the graphics subsystem on behalf of the process
+  (shared between CPU and GPU over PCIe). Because it is backed by system
+  pages, it is already accounted for inside `Commit MB` (`PagefileUsage`). On
+  systems without dedicated VRAM (e.g. integrated GPUs), graphics memory is
+  predominantly allocated here.
+- **PDH Performance Counters**: Queried via standard Windows Performance
+  Data Helper (`pdh.dll`) system-wide without opening per-process handles,
+  preserving the zero-elevation and access-denied-free architecture.
 
 ## Windows API architecture (why the code looks like this)
 
