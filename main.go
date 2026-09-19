@@ -42,7 +42,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 
 type procInfo struct {
 	ppid    uint32
