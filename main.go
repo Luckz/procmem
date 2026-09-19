@@ -318,11 +318,19 @@ func main() {
 	} else {
 		fmt.Printf("%s  Names\n", lines[0])
 		for i, r := range rows {
-			names := make([]string, 0, len(r.names))
+			rootName := strings.ToLower(procs[r.root].name)
+			var otherNames []string
 			for n := range r.names {
-				names = append(names, n)
+				if n != rootName {
+					otherNames = append(otherNames, n)
+				}
 			}
-			sort.Strings(names)
+			sort.Strings(otherNames)
+			names := make([]string, 0, len(r.names))
+			if rootName != "" {
+				names = append(names, rootName)
+			}
+			names = append(names, otherNames...)
 			for j, n := range names {
 				if strings.Contains(n, " ") {
 					names[j] = `"` + n + `"`
