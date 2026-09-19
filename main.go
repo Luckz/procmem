@@ -172,7 +172,7 @@ func main() {
 		switch strings.ToLower(name) {
 		case "a", "all":
 			allKids = true
-		case "x", "strict", "exact-tree", "ec":
+		case "x", "strict", "exact-tree":
 			exactKids = true
 		case "f":
 			hasF = true
