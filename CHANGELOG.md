@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-09-19
+
+### Added
+- **Process termination (`/kill`, `/killtree`)**: Terminate individual processes or whole process trees directly from `procmem`, serving as a safer alternative to `taskkill` or Sysinternals `pskill64` with built-in resource reclamation accounting and safety barriers.
+  - **/kill `<name|PID>`**: Terminates the specified PID or matching processes without affecting child processes.
+  - **/killtree `<name|PID>`**: Terminates matching roots plus all descendant processes top-down (root first, preventing supervisor/watchdog respawns).
+  - **Pre-calculated reclamation**: Measures and displays exact physical RAM, commit charge, and CPU time freed upon termination.
+  - **Safety barrier**: Terminating by process name strictly requires `/f` or `/force`. Omitting `/f` performs a non-destructive dry run, printing a full preview table of processes and memory before exiting with code 2. Numeric PID targeting does not require `/f`.
+  - **PID recycling safety**: Validates kernel process creation timestamps (`child.created >= parent.created`), eliminating PID reuse hazards.
+  - **Safety guards**: Rejects empty targets (`""`) and blocks wildcard-only patterns (`*`, `**`) in kill mode to prevent accidental system-wide termination.
+  - **Quick usage**:
+    - `procmem /kill 1234` — kill single process by PID
+    - `procmem /killtree 1234` — kill process tree by root PID
+    - `procmem /kill /f notepad` — kill matching processes by name
+    - `procmem /killtree /f msedge` — kill browser tree by name
+    - `procmem --kill -ef notepad` — kill exact name with flag bundling
+    - `procmem /killtree msedge` — dry-run preview (without `/f`)
+- **POSIX flag terminator (`--`)**: Supports `--` to stop flag parsing; all subsequent arguments are treated as positional targets.
+
+### Changed
+- **Column layout**: Moved `CPU Time`, `GPU Ded`, and `GPU Shr` before `Names` so all fixed-width numeric metrics are grouped on the left, preventing wide process lists from pushing numbers off-screen.
+- **Kill dry-run preview**: Includes numeric PIDs in the preview table when mixed with process name targets.
+
+### Fixed
+- **Empty string validation**: Disallowed empty process name arguments (`""`), which previously matched every running process on the system.
+- **Flag termination with `--`**: Fixed `--` so it properly stops flag parsing per POSIX convention, allowing arguments starting with `-` or `/` after `--` to be targeted as process names.
+
+### Removed
+- **Removed `/ec`**: Dropped the deprecated `/ec` option completely, allowing `-ec` to correctly unpack as the short-flag bundle `-e` (exact name) and `-c` (CPU time).
+
 ## [1.1.0] - 2026-09-19
 
 ### Added

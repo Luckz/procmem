@@ -11,7 +11,7 @@
 // elevation.
 //
 // Matching: input ending in .exe (without *) is an exact name; /e /exact
-// makes any input exact (.exe optional) and so does /ec, which additionally
+// makes any input exact (.exe optional) and /x /strict additionally
 // restricts descendants to the root's exact name; anything else, including
 // an explicit *, matches by substring.
 //
@@ -51,7 +51,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const version = "1.1.0"
+const version = "1.2.0"
 
 type procInfo struct {
 	ppid    uint32
