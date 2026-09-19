@@ -155,3 +155,8 @@ optional additional metrics).
   CPU execution time is always calculated and included on the process termination path
   without requiring a flag. RAM, commit, CPU, and optional GPU metrics are calculated before
   process handles are terminated, allowing `procmem` to report the exact memory freed upon exit.
+- **Per-target root scoping in tree termination**:
+  While query mode discovers roots using a combined matcher across all targets (consolidating
+  cross-target hierarchies into a unified view), `/killtree` evaluates root discovery strictly
+  per-target. This guarantees that specifying multiple targets (e.g. `procmem /killtree /f nameA nameB`)
+  independently scopes each target's process tree, preventing unintended cross-target tree merging.

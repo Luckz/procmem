@@ -201,43 +201,47 @@ func main() {
 		return true
 	}
 
+	stopFlags := false
 	for _, a := range os.Args[1:] {
 		if a == "--" {
+			stopFlags = true
 			continue
 		}
-		if strings.HasPrefix(a, "--") && len(a) > 2 {
-			if !applyNamed(a[2:]) {
-				fmt.Fprintf(os.Stderr, "unknown option %s\n", a)
-				printUsage(os.Stderr)
-				os.Exit(2)
-			}
-			continue
-		}
-		if strings.HasPrefix(a, "/") && len(a) > 1 {
-			if !applyNamed(a[1:]) {
-				fmt.Fprintf(os.Stderr, "unknown option %s\n", a)
-				printUsage(os.Stderr)
-				os.Exit(2)
-			}
-			continue
-		}
-		if strings.HasPrefix(a, "-") && len(a) > 1 {
-			if applyNamed(a[1:]) {
-				continue
-			}
-			allValid := true
-			for i := 1; i < len(a); i++ {
-				if !applyShort(a[i]) {
-					allValid = false
-					break
+		if !stopFlags {
+			if strings.HasPrefix(a, "--") && len(a) > 2 {
+				if !applyNamed(a[2:]) {
+					fmt.Fprintf(os.Stderr, "unknown option %s\n", a)
+					printUsage(os.Stderr)
+					os.Exit(2)
 				}
-			}
-			if allValid {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "unknown option %s\n", a)
-			printUsage(os.Stderr)
-			os.Exit(2)
+			if strings.HasPrefix(a, "/") && len(a) > 1 {
+				if !applyNamed(a[1:]) {
+					fmt.Fprintf(os.Stderr, "unknown option %s\n", a)
+					printUsage(os.Stderr)
+					os.Exit(2)
+				}
+				continue
+			}
+			if strings.HasPrefix(a, "-") && len(a) > 1 {
+				if applyNamed(a[1:]) {
+					continue
+				}
+				allValid := true
+				for i := 1; i < len(a); i++ {
+					if !applyShort(a[i]) {
+						allValid = false
+						break
+					}
+				}
+				if allValid {
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "unknown option %s\n", a)
+				printUsage(os.Stderr)
+				os.Exit(2)
+			}
 		}
 		positional = append(positional, a)
 	}
@@ -277,6 +281,12 @@ func main() {
 	if len(positional) < 1 {
 		printUsage(os.Stderr)
 		os.Exit(2)
+	}
+	for _, p := range positional {
+		if p == "" {
+			fmt.Fprintln(os.Stderr, "empty process name is not allowed")
+			os.Exit(2)
+		}
 	}
 
 	procs, err := snapshot()
@@ -574,8 +584,13 @@ func runKill(
 				continue
 			}
 		}
+		m := parseName(raw, exactInput || exactKids)
+		if m.exact == "" && m.pattern == "" {
+			fmt.Fprintf(os.Stderr, "wildcard-only pattern '%s' would match every process; not allowed in kill mode\n", raw)
+			os.Exit(2)
+		}
 		hasNameTarget = true
-		targets = append(targets, targetItem{raw: raw, isPID: false, matcher: parseName(raw, exactInput || exactKids)})
+		targets = append(targets, targetItem{raw: raw, isPID: false, matcher: m})
 	}
 
 	kids := map[uint32][]uint32{}
@@ -606,6 +621,14 @@ func runKill(
 	if hasNameTarget && !force {
 		var matched []uint32
 		matchedSet := make(map[uint32]bool)
+		for _, t := range targets {
+			if t.isPID {
+				if _, ok := procs[t.pid]; ok && !matchedSet[t.pid] {
+					matchedSet[t.pid] = true
+					matched = append(matched, t.pid)
+				}
+			}
+		}
 		for pid, p := range procs {
 			for _, t := range targets {
 				if !t.isPID && t.matcher.matches(p.name) {
@@ -737,7 +760,7 @@ func runKill(
 			}
 
 			gpuSummary := ""
-			if showGPU && (totGPUDed > 0 || totGPUShr > 0) {
+			if showGPU {
 				gpuSummary = fmt.Sprintf(", GPU ded %s MB, shared %s MB", commasF(mb(totGPUDed)), commasF(mb(totGPUShr)))
 			}
 			targetJoined := strings.Join(positional, ", ")
@@ -770,6 +793,14 @@ func runKill(
 
 			var roots []uint32
 			seenRoots := make(map[uint32]bool)
+			for _, t := range targets {
+				if t.isPID {
+					if _, ok := procs[t.pid]; ok && !seenRoots[t.pid] {
+						seenRoots[t.pid] = true
+						roots = append(roots, t.pid)
+					}
+				}
+			}
 			for pid, p := range procs {
 				for _, t := range targets {
 					if !t.isPID && t.matcher.matches(p.name) {
@@ -941,7 +972,7 @@ func runKill(
 			}
 
 			gpuSummary := ""
-			if showGPU && (totGPUDed > 0 || totGPUShr > 0) {
+			if showGPU {
 				gpuSummary = fmt.Sprintf(", GPU ded %s MB, shared %s MB", commasF(mb(totGPUDed)), commasF(mb(totGPUShr)))
 			}
 			targetJoined := strings.Join(positional, ", ")
@@ -1137,7 +1168,7 @@ func runKill(
 
 	cpuSummary := fmt.Sprintf(", CPU %s", formatCPU(freedCPU))
 	gpuSummary := ""
-	if showGPU && (freedGPUDed > 0 || freedGPUShr > 0) {
+	if showGPU {
 		gpuSummary = fmt.Sprintf(", GPU ded %s MB, shared %s MB", commasF(mb(freedGPUDed)), commasF(mb(freedGPUShr)))
 	}
 	targetStr := strings.Join(positional, ", ")

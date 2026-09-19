@@ -33,9 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-target queries**: Space-separated process targets (e.g. `procmem chrome discord edge`) evaluated under a unified root hierarchy.
 - **Search filtering modes**:
   - Substring search (default)
-  - Prefix matching (`/p`)
   - Exact matching (`/e`)
-  - Case-sensitivity options (`/c`, `/pc`, `/ec`)
+  - Exact tree (`/ec`): exact root and exact-name children only
   - Flat process listing (`/f`) without tree rollup
 - **Formatted CLI output**: Right-aligned numeric metrics via `tabwriter` with automatic quoting for executable names containing spaces.
 - **Optimized build pipeline**: `make.bat` with `-trimpath` and symbol stripping (`-s -w`), plus GitHub Actions multi-arch cross-compilation for `windows/amd64` and `windows/arm64`.
