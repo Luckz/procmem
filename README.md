@@ -37,7 +37,7 @@ procmem [/a | /x | /f] [/e] [/c] [/g] [/s] <name>...
 ```
 
 Options can use Windows slashes (`/flag`), Unix hyphens (`-flag`, `--flag`),
-and short-flag bundling (e.g. `-cgs`, `-xcg`). Multiple process
+and short-flag bundling (e.g. `-cgs`, `-xcg`, `-ef`). Multiple process
 names can be provided to query several targets together, e.g.
 `procmem brave chrome msedge`.
 
@@ -73,6 +73,53 @@ gone, or fails the parent-PID-reuse check (a recorded parent created
 *after* the child cannot be its real parent). That keeps nested same-name
 trees attached to their true topmost ancestor.
 
+## Process termination
+
+```
+procmem /kill [/f] [/e] [/g] [/s] <name|PID>...
+procmem /killtree [/f] [/x] [/g] [/s] <name|PID>...
+
+  /kill          terminate matching process(es) or <PID>
+  /killtree      terminate matching process(es) or <PID> plus all descendants
+  /f   /force    force termination; required when killing by process name
+  Options /e, /x, /g, and /s also apply (/s gives a compact list).
+```
+
+`procmem` can terminate individual processes or whole process trees using the Windows `TerminateProcess` kernel API. Before terminating, it calculates and reports the exact resources freed (RAM, commit, and CPU / optional GPU memory). CPU time is always included on the termination path.
+
+```text
+C:\> procmem /kill 44936
+Killed PID 44936  ONENOTE.EXE
+=> Killed PID 44936 (ONENOTE.EXE): freed 91.8 MB RAM, 166.1 MB commit, CPU 00:00:06
+```
+
+- **/kill `<name|PID>`** — terminates the specified PID or matching processes (flat: descendants are not terminated).
+- **/killtree `<name|PID>`** — terminates the specified PID or matching root processes **plus all of their descendant processes**.
+  - Terminations are executed **top-down (root first)**: the root process is terminated immediately so supervisor/watchdog processes cannot detect child death and respawn replacement children.
+  - Unlike Windows `taskkill /T`, `procmem` verifies process creation timestamps (`child.created >= parent.created`), preventing accidental termination if PIDs are recycled.
+  - CPU time is always included on the termination path without requiring a flag.
+- **Safety barrier for process names**: When terminating by process name (rather than a numeric PID), **`/f` or `/force` is strictly required** as a safety confirmation. If omitted, `procmem` refuses to kill, displays a rich dry-run preview table with RAM, commit, and CPU time (listing every child executable on extra lines under `Name` for `/killtree`), and exits with code 2:
+  ```text
+  C:\> procmem /killtree nvcontainer office
+  procmem: killing by process name requires /f or /force (e.g. procmem /killtree /f nvcontainer office)
+
+  RootPID  Procs  Name                  RAM MB  Commit MB  CPU Time
+     4164      3  nvcontainer.exe         18.3      120.9  01:37:10
+    78628      2  OfficeClickToRun.exe     5.2       30.8  00:00:18
+                  AppVShNotify.exe    
+  => 2 root(s), 5 process(es) matching 'nvcontainer, office': RAM 23.6 MB, commit 151.6 MB, CPU 01:37:29
+
+  Use /f to confirm: procmem /killtree /f nvcontainer office
+  Or target a single PID: procmem /killtree 4164
+  Use /e /f (or --kill -ef) to restrict to exact process names.
+  ```
+  *(Pass `/s` or `-s` for a compact, de-verbosed list).*
+- **Targeting by PID** (`procmem /kill 1234` or `procmem /killtree 1234`): Numeric arguments are recognized as PIDs and do not require `/f`.
+- **Options and bundling**:
+  - `procmem --kill -ef notepad` — exact process name match + force.
+  - `procmem --killtree -xf msedge` — exact root and exact descendants + force.
+  - `procmem /kill -s 1234` — compact output (omits per-PID output, prints summary only).
+
 ## The columns
 
 | Column | Meaning |
@@ -105,17 +152,20 @@ Two things to know about the numbers:
 
 | Code | Meaning |
 |---|---|
-| 0 | success (including `/h`) |
-| 1 | process snapshot failed, or nothing matched |
-| 2 | usage error (unknown option, more than one of `/a` `/x` `/f`, wrong argument count) |
+| 0 | success (including `/h` or all targeted processes terminated) |
+| 1 | snapshot failed, nothing matched, or at least one process failed to terminate |
+| 2 | usage error (unknown option, missing `/f` for name termination, conflicting options) |
 
 ## Notes & limitations
 
-- **No elevation is required or used.** `procmem` queries process and
+- **No elevation is required for inspection.** `procmem` queries process and
   memory metrics via `NtQuerySystemInformation(SystemProcessInformation)`,
   which the kernel serves without opening process handles. Service-hosted
   and system processes (e.g. `svchost.exe`, `WmiPrvSE.exe`, `System`) are
   fully readable from a normal, non-elevated user token.
+- **Process termination permissions**: Terminating processes running in your own
+  user session does not require elevation. Terminating processes owned by other
+  users or elevated system services requires running `procmem` from an elevated prompt.
 - Windows 10 or later (a requirement of the Go toolchain used to build;
   the underlying APIs go back further).
 - Git Bash / MSYS users: the shell rewrites leading-slash options into

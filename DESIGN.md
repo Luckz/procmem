@@ -125,3 +125,33 @@ optional additional metrics).
   `x/sys/windows` exports `windows.SYSTEM_PROCESS_INFORMATION` and
   `windows.NTUnicodeString`, but does not export an `NtQuerySystemInformation`
   call wrapper. We load it via `windows.NewLazySystemDLL("ntdll.dll").NewProc("NtQuerySystemInformation")`.
+
+## Process termination architecture
+
+- **Unconditional termination via `TerminateProcess`**:
+  Windows lacks asynchronous POSIX signals (`SIGTERM`, `SIGHUP`). `TerminateProcess`
+  (calling `NtTerminateProcess` in `ntdll.dll`) is the universal, authoritative mechanism
+  used by Task Manager and `taskkill /F`. The Windows NT kernel immediately halts user-mode
+  threads and forcibly reclaims all operating system resources: physical memory pages,
+  pagefile commit, kernel handles (files, sockets, pipes, mutexes), DirectX/GPU allocations,
+  and GDI objects. It never deadlocks or hangs waiting on unresponsive user-mode code.
+- **Top-down execution order (root first)**:
+  Process trees are terminated root-first. Terminating the root process immediately
+  prevents supervisor or watchdog parents (e.g. browser main processes, Node cluster masters)
+  from detecting child termination and spawning replacement worker processes before the tree
+  can be killed.
+- **PID recycling safety**:
+  Unlike `taskkill /T`, which can terminate unrelated processes if a child exits and its PID
+  is reused by Windows, `procmem` verifies process creation timestamps
+  (`procs[child].created >= procs[parent].created`), completely eliminating PID reuse hazards.
+- **Name-targeting safety barrier & rich dry-run preview**:
+  Killing by process name requires explicit confirmation via `/f` or `/force`. If omitted,
+  `procmem` acts as a non-destructive dry run: rendering a full diagnostic preview table
+  with `PID [Procs] Name RAM MB Commit MB CPU Time` (with all child executables in a tree
+  listed on extra indented lines directly under `Name`), explaining the requirement for `/f`,
+  and exiting with code 2. Numeric PID targeting does not require `/f`. Passing `/s` provides
+  a compact, de-verbosed list.
+- **Always-on CPU time & pre-calculated resource reclamation**:
+  CPU execution time is always calculated and included on the process termination path
+  without requiring a flag. RAM, commit, CPU, and optional GPU metrics are calculated before
+  process handles are terminated, allowing `procmem` to report the exact memory freed upon exit.

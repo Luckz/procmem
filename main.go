@@ -16,7 +16,10 @@
 // an explicit *, matches by substring.
 //
 // Usage: procmem [/a | /x | /f] [/e] [/c] [/g] [/s] <name>...
+//        procmem /kill [/f] [/e] [/g] [/s] <name|PID>...
+//        procmem /killtree [/f] [/x] [/g] [/s] <name|PID>...
 //
+// Query options:
 //	/a   /all      count all descendants regardless of name (default)
 //	/x   /strict   eXact tree: exact root (implies /e) and exact-name children
 //	/f   /flat     one row per matching process; no grouping, no rollup
@@ -25,6 +28,12 @@
 //	/g   /gpu      show Dedicated and Shared GPU memory
 //	/s   /short    omit the Names column
 //	/h   /?  /help show this help
+//
+// Process termination:
+//	/kill          terminate matching process(es) or <PID>
+//	/killtree      terminate matching process(es) or <PID> plus all descendants
+//	/f   /force    force termination; required when killing by process name
+//	Options /e, /x, /g, and /s also apply (/s gives a compact list).
 package main
 
 import (
@@ -92,11 +101,14 @@ func parseName(raw string, forceExact bool) matcher {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /x | /f] [/e] [/c] [/g] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
+	fmt.Fprintf(w, "       %s /kill [/f] [/e] [/g] [/s] <name|PID>...\n", filepath.Base(os.Args[0]))
+	fmt.Fprintf(w, "       %s /killtree [/f] [/x] [/g] [/s] <name|PID>...\n", filepath.Base(os.Args[0]))
 	fmt.Fprint(w, "\nPer root instance of <name>: combined RAM (private working set =\n"+
 		"Task Manager \"Memory\") and commit (pagefile usage = Task Manager\n"+
 		"\"Commit size\") of that instance plus its descendant processes, with the\n"+
 		"unique process names they use.\n"+
 		"Multiple process names can be specified to query together.\n\n"+
+		"Query options:\n"+
 		"  /a   /all          count all descendants regardless of name (default)\n"+
 		"  /x   /strict       eXact tree: exact root (implies /e) and exact-name children\n"+
 		"  /f   /flat         one row per matching process; no grouping, no rollup\n"+
@@ -105,9 +117,14 @@ func printUsage(w io.Writer) {
 		"  /g   /gpu          show Dedicated and Shared GPU memory\n"+
 		"  /s   /short        omit the Names column\n"+
 		"  /h   /?   /help    show this help\n\n"+
-		"Options can use Windows /flag, Unix -flag / --flag, and bundling (e.g. -cg, -cgs).\n"+
+		"Process termination:\n"+
+		"  /kill              terminate matching process(es) or <PID>\n"+
+		"  /killtree          terminate matching process(es) or <PID> plus all descendants\n"+
+		"  /f   /force        force termination; required when killing by process name\n"+
+		"  Options /e, /x, /g, and /s also apply (/s gives a compact list).\n\n"+
+		"Options can use Windows /flag, Unix -flag / --flag, and bundling (e.g. -cg, -cgs, -ef).\n"+
 		"Matching: input ending in .exe is exact; anything else, or an explicit\n"+
-		"* (e.g. *team*), matches by substring.\n")
+		"* (e.g. *team*), matches by substring. Numeric input without .exe is a PID.\n")
 }
 
 func main() {
@@ -119,6 +136,10 @@ func main() {
 		short      bool
 		showCPU    bool
 		showGPU    bool
+		killMode   bool
+		killTree   bool
+		hasF       bool
+		force      bool
 		positional []string
 	)
 
@@ -129,7 +150,7 @@ func main() {
 		case 'x':
 			exactKids = true
 		case 'f':
-			flat = true
+			hasF = true
 		case 'e':
 			exactInput = true
 		case 'c':
@@ -153,8 +174,12 @@ func main() {
 			allKids = true
 		case "x", "strict", "exact-tree", "ec":
 			exactKids = true
-		case "f", "flat":
+		case "f":
+			hasF = true
+		case "flat":
 			flat = true
+		case "force":
+			force = true
 		case "e", "exact":
 			exactInput = true
 		case "c", "cpu":
@@ -163,6 +188,10 @@ func main() {
 			showGPU = true
 		case "s", "short":
 			short = true
+		case "kill":
+			killMode = true
+		case "killtree", "kill-tree":
+			killTree = true
 		case "h", "?", "help":
 			printUsage(os.Stdout)
 			os.Exit(0)
@@ -213,15 +242,54 @@ func main() {
 		positional = append(positional, a)
 	}
 
-	// /a, /x and /f are three exclusive traversal scopes.
-	if (allKids && exactKids) || (allKids && flat) || (exactKids && flat) {
-		fmt.Fprintln(os.Stderr, "specify at most one of /a, /x, /f")
+	if killMode && killTree {
+		fmt.Fprintln(os.Stderr, "specify at most one of /kill, /killtree")
 		os.Exit(2)
 	}
+	if killMode || killTree {
+		if flat {
+			fmt.Fprintln(os.Stderr, "/flat cannot be used with /kill or /killtree")
+			os.Exit(2)
+		}
+		if hasF || force {
+			force = true
+		}
+		flat = false
+		if allKids && exactKids {
+			fmt.Fprintln(os.Stderr, "specify at most one of /a, /x")
+			os.Exit(2)
+		}
+	} else {
+		if force {
+			fmt.Fprintln(os.Stderr, "/force can only be used with /kill or /killtree")
+			os.Exit(2)
+		}
+		if hasF || flat {
+			flat = true
+		}
+		// /a, /x and /f are three exclusive traversal scopes.
+		if (allKids && exactKids) || (allKids && flat) || (exactKids && flat) {
+			fmt.Fprintln(os.Stderr, "specify at most one of /a, /x, /f")
+			os.Exit(2)
+		}
+	}
+
 	if len(positional) < 1 {
 		printUsage(os.Stderr)
 		os.Exit(2)
 	}
+
+	procs, err := snapshot()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "snapshot:", err)
+		os.Exit(1)
+	}
+
+	if killMode || killTree {
+		runKill(procs, positional, killTree, force, exactInput, exactKids, showCPU, showGPU, short)
+		return
+	}
+
 	var matchers []matcher
 	for _, raw := range positional {
 		matchers = append(matchers, parseName(raw, exactInput || exactKids))
@@ -233,12 +301,6 @@ func main() {
 			}
 		}
 		return false
-	}
-
-	procs, err := snapshot()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "snapshot:", err)
-		os.Exit(1)
 	}
 
 	var matched []uint32
@@ -555,6 +617,621 @@ func main() {
 		fmt.Printf("=> %d root(s), %s process(es) matching '%s': RAM %s MB, commit %s MB%s%s\n",
 			len(rows), commasI(totProcs), targetStr, commasF(mb(totWS)), commasF(mb(totCommit)), cpuSummary, gpuSummary)
 	}
+}
+
+func runKill(
+	procs map[uint32]procInfo,
+	positional []string,
+	killTree bool,
+	force bool,
+	exactInput bool,
+	exactKids bool,
+	showCPU bool,
+	showGPU bool,
+	short bool,
+) {
+	// CPU time is always included on the kill and killtree use path.
+	showCPU = true
+
+	type targetItem struct {
+		raw     string
+		isPID   bool
+		pid     uint32
+		matcher matcher
+	}
+	var targets []targetItem
+	hasNameTarget := false
+	for _, raw := range positional {
+		if !strings.Contains(raw, "*") && !strings.HasSuffix(strings.ToLower(raw), ".exe") && !exactInput {
+			if pidVal, err := strconv.ParseUint(raw, 10, 32); err == nil {
+				targets = append(targets, targetItem{raw: raw, isPID: true, pid: uint32(pidVal)})
+				continue
+			}
+		}
+		hasNameTarget = true
+		targets = append(targets, targetItem{raw: raw, isPID: false, matcher: parseName(raw, exactInput || exactKids)})
+	}
+
+	kids := map[uint32][]uint32{}
+	for pid, p := range procs {
+		if _, ok := procs[p.ppid]; ok && p.ppid != pid {
+			kids[p.ppid] = append(kids[p.ppid], pid)
+		}
+	}
+
+	if showGPU {
+		gpuDed, gpuShr, err := queryGPUMemory()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "procmem: GPU memory query failed: %v\n", err)
+			os.Exit(1)
+		}
+		for pid, info := range procs {
+			if ded, ok := gpuDed[pid]; ok {
+				info.gpuDed = ded
+			}
+			if shr, ok := gpuShr[pid]; ok {
+				info.gpuShr = shr
+			}
+			procs[pid] = info
+		}
+	}
+
+	// Safety check: killing by process name strictly requires /f or /force
+	if hasNameTarget && !force {
+		var matched []uint32
+		matchedSet := make(map[uint32]bool)
+		for pid, p := range procs {
+			for _, t := range targets {
+				if !t.isPID && t.matcher.matches(p.name) {
+					if !matchedSet[pid] {
+						matchedSet[pid] = true
+						matched = append(matched, pid)
+					}
+					break
+				}
+			}
+		}
+		if len(matched) == 0 {
+			targetStr := strings.Join(positional, ", ")
+			fmt.Fprintf(os.Stderr, "No running processes matching '%s'.\n", targetStr)
+			os.Exit(1)
+		}
+		killCmd := "/kill"
+		if killTree {
+			killCmd = "/killtree"
+		}
+		targetStr := strings.Join(positional, " ")
+
+		if short {
+			// Compact de-verbosed view
+			fmt.Fprintf(os.Stderr, "procmem: killing by process name requires /f or /force (e.g. procmem %s /f %s)\n", killCmd, targetStr)
+			fmt.Fprintf(os.Stderr, "Matched %d process(es):\n", len(matched))
+			sort.Slice(matched, func(i, j int) bool { return matched[i] < matched[j] })
+			for _, pid := range matched {
+				fmt.Fprintf(os.Stderr, "  PID %-6d %s\n", pid, procs[pid].name)
+			}
+			fmt.Fprintln(os.Stderr, "Use /e /f (or --kill -ef) to restrict to exact process names.")
+			os.Exit(2)
+		}
+
+		if !killTree {
+			// Flat preview
+			type flatRow struct {
+				pid     uint32
+				name    string
+				ws      uint64
+				commit  uint64
+				cpu     uint64
+				gpuDed  uint64
+				gpuShr  uint64
+			}
+			var rows []flatRow
+			var totWS, totCommit, totCPU, totGPUDed, totGPUShr uint64
+			maxPIDLen := len("PID")
+			maxNameLen := len("Name")
+			maxRAMLen := len("RAM MB")
+			maxCommitLen := len("Commit MB")
+			maxCPULen := len("CPU Time")
+			maxGPUDedLen := len("GPU Ded")
+			maxGPUShrLen := len("GPU Shr")
+
+			for _, pid := range matched {
+				p := procs[pid]
+				totWS += p.ws
+				totCommit += p.commit
+				totCPU += p.cpu
+				totGPUDed += p.gpuDed
+				totGPUShr += p.gpuShr
+				rows = append(rows, flatRow{
+					pid:    pid,
+					name:   p.name,
+					ws:     p.ws,
+					commit: p.commit,
+					cpu:    p.cpu,
+					gpuDed: p.gpuDed,
+					gpuShr: p.gpuShr,
+				})
+			}
+			sort.Slice(rows, func(i, j int) bool {
+				if rows[i].commit != rows[j].commit {
+					return rows[i].commit > rows[j].commit
+				}
+				return rows[i].pid < rows[j].pid
+			})
+			for _, r := range rows {
+				pidStr := strconv.Itoa(int(r.pid))
+				if len(pidStr) > maxPIDLen {
+					maxPIDLen = len(pidStr)
+				}
+				if len(r.name) > maxNameLen {
+					maxNameLen = len(r.name)
+				}
+				ramStr := commasF(mb(r.ws))
+				if len(ramStr) > maxRAMLen {
+					maxRAMLen = len(ramStr)
+				}
+				commitStr := commasF(mb(r.commit))
+				if len(commitStr) > maxCommitLen {
+					maxCommitLen = len(commitStr)
+				}
+				cpuStr := formatCPU(r.cpu)
+				if len(cpuStr) > maxCPULen {
+					maxCPULen = len(cpuStr)
+				}
+				if showGPU {
+					dedStr := commasF(mb(r.gpuDed))
+					if len(dedStr) > maxGPUDedLen {
+						maxGPUDedLen = len(dedStr)
+					}
+					shrStr := commasF(mb(r.gpuShr))
+					if len(shrStr) > maxGPUShrLen {
+						maxGPUShrLen = len(shrStr)
+					}
+				}
+			}
+
+			fmt.Fprintf(os.Stderr, "procmem: killing by process name requires /f or /force (e.g. procmem %s /f %s)\n\n", killCmd, targetStr)
+
+			var header strings.Builder
+			fmt.Fprintf(&header, "%*s  %-*s  %*s  %*s  %*s",
+				maxPIDLen, "PID", maxNameLen, "Name", maxRAMLen, "RAM MB", maxCommitLen, "Commit MB", maxCPULen, "CPU Time")
+			if showGPU {
+				fmt.Fprintf(&header, "  %*s  %*s", maxGPUDedLen, "GPU Ded", maxGPUShrLen, "GPU Shr")
+			}
+			fmt.Fprintln(os.Stderr, header.String())
+
+			for _, r := range rows {
+				var row strings.Builder
+				fmt.Fprintf(&row, "%*d  %-*s  %*s  %*s  %*s",
+					maxPIDLen, r.pid, maxNameLen, r.name, maxRAMLen, commasF(mb(r.ws)), maxCommitLen, commasF(mb(r.commit)), maxCPULen, formatCPU(r.cpu))
+				if showGPU {
+					fmt.Fprintf(&row, "  %*s  %*s", maxGPUDedLen, commasF(mb(r.gpuDed)), maxGPUShrLen, commasF(mb(r.gpuShr)))
+				}
+				fmt.Fprintln(os.Stderr, row.String())
+			}
+
+			gpuSummary := ""
+			if showGPU && (totGPUDed > 0 || totGPUShr > 0) {
+				gpuSummary = fmt.Sprintf(", GPU ded %s MB, shared %s MB", commasF(mb(totGPUDed)), commasF(mb(totGPUShr)))
+			}
+			targetJoined := strings.Join(positional, ", ")
+			fmt.Fprintf(os.Stderr, "=> %s process(es) matching '%s': RAM %s MB, commit %s MB, CPU %s%s\n\n",
+				commasI(len(rows)), targetJoined, commasF(mb(totWS)), commasF(mb(totCommit)), formatCPU(totCPU), gpuSummary)
+
+			fmt.Fprintf(os.Stderr, "Use /f to confirm: procmem %s /f %s\n", killCmd, targetStr)
+			if len(rows) > 0 {
+				fmt.Fprintf(os.Stderr, "Or target a single PID: procmem %s %d\n", killCmd, rows[0].pid)
+			}
+			fmt.Fprintln(os.Stderr, "Use /e /f (or --kill -ef) to restrict to exact process names.")
+			os.Exit(2)
+		} else {
+			// Tree preview
+			rootOf := func(pid uint32, m matcher) uint32 {
+				cur := pid
+				for i := 0; i < 128; i++ {
+					ppid := procs[cur].ppid
+					parent, ok := procs[ppid]
+					if !ok || !m.matches(parent.name) {
+						return cur
+					}
+					if pt, ct := parent.created, procs[cur].created; pt != 0 && ct != 0 && pt > ct {
+						return cur
+					}
+					cur = ppid
+				}
+				return cur
+			}
+
+			var roots []uint32
+			seenRoots := make(map[uint32]bool)
+			for pid, p := range procs {
+				for _, t := range targets {
+					if !t.isPID && t.matcher.matches(p.name) {
+						r := rootOf(pid, t.matcher)
+						if !seenRoots[r] {
+							seenRoots[r] = true
+							roots = append(roots, r)
+						}
+						break
+					}
+				}
+			}
+
+			type treeRow struct {
+				rootPID    uint32
+				procsCount int
+				rootName   string
+				otherNames []string
+				ws         uint64
+				commit     uint64
+				cpu        uint64
+				gpuDed     uint64
+				gpuShr     uint64
+			}
+			var treeRows []treeRow
+			var totWS, totCommit, totCPU, totGPUDed, totGPUShr uint64
+			var totProcs int
+
+			for _, r := range roots {
+				rootName := procs[r].name
+				namesSet := make(map[string]bool)
+				queue := []uint32{r}
+				var treeWS, treeCommit, treeCPU, treeGPUDed, treeGPUShr uint64
+				seenTree := make(map[uint32]bool)
+				for i := 0; i < len(queue); i++ {
+					curr := queue[i]
+					seenTree[curr] = true
+					p := procs[curr]
+					treeWS += p.ws
+					treeCommit += p.commit
+					treeCPU += p.cpu
+					treeGPUDed += p.gpuDed
+					treeGPUShr += p.gpuShr
+					if !strings.EqualFold(p.name, rootName) {
+						namesSet[p.name] = true
+					}
+					currName := strings.ToLower(p.name)
+					for _, child := range kids[curr] {
+						if seenTree[child] {
+							continue
+						}
+						if pt, ct := procs[curr].created, procs[child].created; pt != 0 && ct != 0 && pt > ct {
+							continue
+						}
+						if exactKids && strings.ToLower(procs[child].name) != currName {
+							continue
+						}
+						queue = append(queue, child)
+					}
+				}
+
+				var otherNames []string
+				for n := range namesSet {
+					otherNames = append(otherNames, n)
+				}
+				sort.Strings(otherNames)
+
+				totWS += treeWS
+				totCommit += treeCommit
+				totCPU += treeCPU
+				totGPUDed += treeGPUDed
+				totGPUShr += treeGPUShr
+				totProcs += len(queue)
+
+				treeRows = append(treeRows, treeRow{
+					rootPID:    r,
+					procsCount: len(queue),
+					rootName:   rootName,
+					otherNames: otherNames,
+					ws:         treeWS,
+					commit:     treeCommit,
+					cpu:        treeCPU,
+					gpuDed:     treeGPUDed,
+					gpuShr:     treeGPUShr,
+				})
+			}
+
+			sort.Slice(treeRows, func(i, j int) bool {
+				if treeRows[i].commit != treeRows[j].commit {
+					return treeRows[i].commit > treeRows[j].commit
+				}
+				return treeRows[i].rootPID < treeRows[j].rootPID
+			})
+
+			maxPIDLen := len("RootPID")
+			maxProcsLen := len("Procs")
+			maxNameLen := len("Name")
+			maxRAMLen := len("RAM MB")
+			maxCommitLen := len("Commit MB")
+			maxCPULen := len("CPU Time")
+			maxGPUDedLen := len("GPU Ded")
+			maxGPUShrLen := len("GPU Shr")
+
+			for _, r := range treeRows {
+				pidStr := strconv.Itoa(int(r.rootPID))
+				if len(pidStr) > maxPIDLen {
+					maxPIDLen = len(pidStr)
+				}
+				procsStr := strconv.Itoa(r.procsCount)
+				if len(procsStr) > maxProcsLen {
+					maxProcsLen = len(procsStr)
+				}
+				if len(r.rootName) > maxNameLen {
+					maxNameLen = len(r.rootName)
+				}
+				for _, n := range r.otherNames {
+					if len(n) > maxNameLen {
+						maxNameLen = len(n)
+					}
+				}
+				ramStr := commasF(mb(r.ws))
+				if len(ramStr) > maxRAMLen {
+					maxRAMLen = len(ramStr)
+				}
+				commitStr := commasF(mb(r.commit))
+				if len(commitStr) > maxCommitLen {
+					maxCommitLen = len(commitStr)
+				}
+				cpuStr := formatCPU(r.cpu)
+				if len(cpuStr) > maxCPULen {
+					maxCPULen = len(cpuStr)
+				}
+				if showGPU {
+					dedStr := commasF(mb(r.gpuDed))
+					if len(dedStr) > maxGPUDedLen {
+						maxGPUDedLen = len(dedStr)
+					}
+					shrStr := commasF(mb(r.gpuShr))
+					if len(shrStr) > maxGPUShrLen {
+						maxGPUShrLen = len(shrStr)
+					}
+				}
+			}
+
+			fmt.Fprintf(os.Stderr, "procmem: killing by process name requires /f or /force (e.g. procmem %s /f %s)\n\n", killCmd, targetStr)
+
+			var header strings.Builder
+			fmt.Fprintf(&header, "%*s  %*s  %-*s  %*s  %*s  %*s",
+				maxPIDLen, "RootPID", maxProcsLen, "Procs", maxNameLen, "Name", maxRAMLen, "RAM MB", maxCommitLen, "Commit MB", maxCPULen, "CPU Time")
+			if showGPU {
+				fmt.Fprintf(&header, "  %*s  %*s", maxGPUDedLen, "GPU Ded", maxGPUShrLen, "GPU Shr")
+			}
+			fmt.Fprintln(os.Stderr, header.String())
+
+			for _, r := range treeRows {
+				var row strings.Builder
+				fmt.Fprintf(&row, "%*d  %*d  %-*s  %*s  %*s  %*s",
+					maxPIDLen, r.rootPID, maxProcsLen, r.procsCount, maxNameLen, r.rootName, maxRAMLen, commasF(mb(r.ws)), maxCommitLen, commasF(mb(r.commit)), maxCPULen, formatCPU(r.cpu))
+				if showGPU {
+					fmt.Fprintf(&row, "  %*s  %*s", maxGPUDedLen, commasF(mb(r.gpuDed)), maxGPUShrLen, commasF(mb(r.gpuShr)))
+				}
+				fmt.Fprintln(os.Stderr, row.String())
+				for _, childName := range r.otherNames {
+					var childRow strings.Builder
+					fmt.Fprintf(&childRow, "%*s  %*s  %-*s",
+						maxPIDLen, "", maxProcsLen, "", maxNameLen, childName)
+					fmt.Fprintln(os.Stderr, childRow.String())
+				}
+			}
+
+			gpuSummary := ""
+			if showGPU && (totGPUDed > 0 || totGPUShr > 0) {
+				gpuSummary = fmt.Sprintf(", GPU ded %s MB, shared %s MB", commasF(mb(totGPUDed)), commasF(mb(totGPUShr)))
+			}
+			targetJoined := strings.Join(positional, ", ")
+			fmt.Fprintf(os.Stderr, "=> %d root(s), %s process(es) matching '%s': RAM %s MB, commit %s MB, CPU %s%s\n\n",
+				len(treeRows), commasI(totProcs), targetJoined, commasF(mb(totWS)), commasF(mb(totCommit)), formatCPU(totCPU), gpuSummary)
+
+			fmt.Fprintf(os.Stderr, "Use /f to confirm: procmem %s /f %s\n", killCmd, targetStr)
+			if len(treeRows) > 0 {
+				fmt.Fprintf(os.Stderr, "Or target a single PID: procmem %s %d\n", killCmd, treeRows[0].rootPID)
+			}
+			fmt.Fprintln(os.Stderr, "Use /e /f (or --kill -ef) to restrict to exact process names.")
+			os.Exit(2)
+		}
+	}
+
+	var toKill []uint32
+	seenKill := make(map[uint32]bool)
+	addToKill := func(pid uint32) {
+		if !seenKill[pid] {
+			seenKill[pid] = true
+			toKill = append(toKill, pid)
+		}
+	}
+	targetErrors := false
+
+	if !killTree {
+		for _, t := range targets {
+			if t.isPID {
+				if _, ok := procs[t.pid]; ok {
+					addToKill(t.pid)
+				} else {
+					fmt.Fprintf(os.Stderr, "No running process with PID %d.\n", t.pid)
+					targetErrors = true
+				}
+			} else {
+				matchedThis := 0
+				for pid, p := range procs {
+					if t.matcher.matches(p.name) {
+						addToKill(pid)
+						matchedThis++
+					}
+				}
+				if matchedThis == 0 {
+					fmt.Fprintf(os.Stderr, "No running processes matching '%s'.\n", t.raw)
+					targetErrors = true
+				}
+			}
+		}
+	} else {
+		rootOf := func(pid uint32, m matcher) uint32 {
+			cur := pid
+			for i := 0; i < 128; i++ {
+				ppid := procs[cur].ppid
+				parent, ok := procs[ppid]
+				if !ok || !m.matches(parent.name) {
+					return cur
+				}
+				if pt, ct := parent.created, procs[cur].created; pt != 0 && ct != 0 && pt > ct {
+					return cur
+				}
+				cur = ppid
+			}
+			return cur
+		}
+
+		collectTree := func(root uint32) {
+			queue := []uint32{root}
+			for i := 0; i < len(queue); i++ {
+				curr := queue[i]
+				addToKill(curr)
+				currName := strings.ToLower(procs[curr].name)
+				for _, child := range kids[curr] {
+					if seenKill[child] {
+						continue
+					}
+					if pt, ct := procs[curr].created, procs[child].created; pt != 0 && ct != 0 && pt > ct {
+						continue
+					}
+					if exactKids && strings.ToLower(procs[child].name) != currName {
+						continue
+					}
+					queue = append(queue, child)
+				}
+			}
+		}
+
+		for _, t := range targets {
+			if t.isPID {
+				if _, ok := procs[t.pid]; ok {
+					collectTree(t.pid)
+				} else {
+					fmt.Fprintf(os.Stderr, "No running process with PID %d.\n", t.pid)
+					targetErrors = true
+				}
+			} else {
+				var roots []uint32
+				seenRoots := make(map[uint32]bool)
+				for pid, p := range procs {
+					if t.matcher.matches(p.name) {
+						r := rootOf(pid, t.matcher)
+						if !seenRoots[r] {
+							seenRoots[r] = true
+							roots = append(roots, r)
+						}
+					}
+				}
+				if len(roots) == 0 {
+					fmt.Fprintf(os.Stderr, "No running processes matching '%s'.\n", t.raw)
+					targetErrors = true
+				} else {
+					for _, r := range roots {
+						collectTree(r)
+					}
+				}
+			}
+		}
+	}
+
+	if len(toKill) == 0 {
+		os.Exit(1)
+	}
+
+	type killResult struct {
+		pid    uint32
+		name   string
+		ws     uint64
+		commit uint64
+		cpu    uint64
+		gpuDed uint64
+		gpuShr uint64
+		err    error
+	}
+
+	var results []killResult
+	var freedWS, freedCommit, freedCPU, freedGPUDed, freedGPUShr uint64
+	var successCount, failCount int
+
+	for _, pid := range toKill {
+		p := procs[pid]
+		name := p.name
+		if name == "" {
+			if pid == 0 {
+				name = "System Idle Process"
+			} else {
+				name = "Unknown"
+			}
+		}
+		res := killResult{
+			pid:    pid,
+			name:   name,
+			ws:     p.ws,
+			commit: p.commit,
+			cpu:    p.cpu,
+			gpuDed: p.gpuDed,
+			gpuShr: p.gpuShr,
+		}
+		if pid == 0 {
+			res.err = fmt.Errorf("cannot terminate System Idle Process")
+		} else {
+			h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid)
+			if err != nil {
+				res.err = err
+			} else {
+				if err := windows.TerminateProcess(h, 1); err != nil {
+					res.err = err
+				}
+				windows.CloseHandle(h)
+			}
+		}
+
+		if res.err == nil {
+			successCount++
+			freedWS += res.ws
+			freedCommit += res.commit
+			freedCPU += res.cpu
+			freedGPUDed += res.gpuDed
+			freedGPUShr += res.gpuShr
+		} else {
+			failCount++
+		}
+		results = append(results, res)
+	}
+
+	if !short {
+		for _, res := range results {
+			if res.err == nil {
+				fmt.Printf("Killed PID %-6d %s\n", res.pid, res.name)
+			} else {
+				fmt.Fprintf(os.Stderr, "Failed to kill PID %-6d %s: %v\n", res.pid, res.name, res.err)
+			}
+		}
+	}
+
+	cpuSummary := fmt.Sprintf(", CPU %s", formatCPU(freedCPU))
+	gpuSummary := ""
+	if showGPU && (freedGPUDed > 0 || freedGPUShr > 0) {
+		gpuSummary = fmt.Sprintf(", GPU ded %s MB, shared %s MB", commasF(mb(freedGPUDed)), commasF(mb(freedGPUShr)))
+	}
+	targetStr := strings.Join(positional, ", ")
+	if failCount == 0 {
+		if len(results) == 1 {
+			fmt.Printf("=> Killed PID %d (%s): freed %s MB RAM, %s MB commit%s%s\n",
+				results[0].pid, results[0].name, commasF(mb(freedWS)), commasF(mb(freedCommit)), cpuSummary, gpuSummary)
+		} else {
+			fmt.Printf("=> Killed %s process(es) matching '%s': freed %s MB RAM, %s MB commit%s%s\n",
+				commasI(successCount), targetStr, commasF(mb(freedWS)), commasF(mb(freedCommit)), cpuSummary, gpuSummary)
+		}
+	} else {
+		fmt.Printf("=> Killed %s of %s process(es) matching '%s': freed %s MB RAM, %s MB commit%s%s\n",
+			commasI(successCount), commasI(successCount+failCount), targetStr, commasF(mb(freedWS)), commasF(mb(freedCommit)), cpuSummary, gpuSummary)
+	}
+
+	if failCount > 0 || targetErrors {
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
 
 func mb(v uint64) float64 { return float64(v) / (1 << 20) }
