@@ -22,10 +22,10 @@ jobs:
       GOARCH: ${{ matrix.goarch }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
 
@@ -53,7 +53,7 @@ jobs:
           sha256sum "$BIN_NAME" > "$BIN_NAME.sha256"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: assets-${{ matrix.goarch }}
           path: dist/*
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Extract release notes
         env:
@@ -72,7 +72,7 @@ jobs:
         run: python3 .github/extract-release-notes.py
 
       - name: Download all build assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
           merge-multiple: true
@@ -84,7 +84,7 @@ jobs:
           rm -f *.sha256
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release-assets/*
           body_path: release-notes.md
