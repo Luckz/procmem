@@ -128,10 +128,10 @@ Killed PID 44936  ONENOTE.EXE
 | Procs | number of processes counted in the group |
 | RAM MB | private working set of the group, in MiB (Task Manager's default "Memory" column) |
 | Commit MB | commit charge of the group (psapi `PagefileUsage` = Task Manager's "Commit size") |
-| Names | unique process names in the group (hidden by `/s`), with the root name listed first; names with spaces are quoted |
 | CPU Time | (optional: `/cpu` or `/c`) total CPU execution time across all threads in `[D:]HH:MM:SS` |
 | GPU Ded | (optional: `/gpu` or `/g`) dedicated GPU memory in MiB |
 | GPU Shr | (optional: `/gpu` or `/g`) shared system GPU memory in MiB |
+| Names | unique process names in the group (hidden by `/s`), with the root name listed first; names with spaces are quoted |
 
 Rows are sorted by commit, highest first.
 

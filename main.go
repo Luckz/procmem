@@ -459,48 +459,32 @@ func main() {
 
 	var numBuf bytes.Buffer
 	w := tabwriter.NewWriter(&numBuf, 0, 0, 2, ' ', tabwriter.AlignRight)
-	if short {
+	if flat {
+		fmt.Fprint(w, "PID\tRAM MB\tCommit MB\t")
+	} else {
+		fmt.Fprint(w, "RootPID\tProcs\tRAM MB\tCommit MB\t")
+	}
+	if showCPU {
+		fmt.Fprint(w, "CPU Time\t")
+	}
+	if showGPU {
+		fmt.Fprint(w, "GPU Ded\tGPU Shr\t")
+	}
+	fmt.Fprintln(w)
+	for _, r := range rows {
+		ram, commit := commasF(mb(r.ws)), commasF(mb(r.commit))
 		if flat {
-			fmt.Fprint(w, "PID\tRAM MB\tCommit MB\t")
+			fmt.Fprintf(w, "%d\t%s\t%s\t", r.root, ram, commit)
 		} else {
-			fmt.Fprint(w, "RootPID\tProcs\tRAM MB\tCommit MB\t")
+			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t", r.root, commasI(r.procs), ram, commit)
 		}
 		if showCPU {
-			fmt.Fprint(w, "CPU Time\t")
+			fmt.Fprintf(w, "%s\t", formatCPU(r.cpu))
 		}
 		if showGPU {
-			fmt.Fprint(w, "GPU Ded\tGPU Shr\t")
+			fmt.Fprintf(w, "%s\t%s\t", commasF(mb(r.gpuDed)), commasF(mb(r.gpuShr)))
 		}
 		fmt.Fprintln(w)
-		for _, r := range rows {
-			ram, commit := commasF(mb(r.ws)), commasF(mb(r.commit))
-			if flat {
-				fmt.Fprintf(w, "%d\t%s\t%s\t", r.root, ram, commit)
-			} else {
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t", r.root, commasI(r.procs), ram, commit)
-			}
-			if showCPU {
-				fmt.Fprintf(w, "%s\t", formatCPU(r.cpu))
-			}
-			if showGPU {
-				fmt.Fprintf(w, "%s\t%s\t", commasF(mb(r.gpuDed)), commasF(mb(r.gpuShr)))
-			}
-			fmt.Fprintln(w)
-		}
-	} else {
-		if flat {
-			fmt.Fprintln(w, "PID\tRAM MB\tCommit MB\t")
-		} else {
-			fmt.Fprintln(w, "RootPID\tProcs\tRAM MB\tCommit MB\t")
-		}
-		for _, r := range rows {
-			ram, commit := commasF(mb(r.ws)), commasF(mb(r.commit))
-			if flat {
-				fmt.Fprintf(w, "%d\t%s\t%s\t\n", r.root, ram, commit)
-			} else {
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t\n", r.root, commasI(r.procs), ram, commit)
-			}
-		}
 	}
 	w.Flush()
 
@@ -510,17 +494,7 @@ func main() {
 			fmt.Println(line)
 		}
 	} else {
-		type rowDisp struct {
-			namesStr  string
-			cpuStr    string
-			gpuDedStr string
-			gpuShrStr string
-		}
-		disps := make([]rowDisp, len(rows))
-		maxNamesLen := len("Names")
-		maxCPULen := len("CPU Time")
-		maxGPUDedLen := len("GPU Ded")
-		maxGPUShrLen := len("GPU Shr")
+		fmt.Printf("%s  Names\n", lines[0])
 		for i, r := range rows {
 			rootName := strings.ToLower(procs[r.root].name)
 			var otherNames []string
@@ -540,55 +514,7 @@ func main() {
 					names[j] = `"` + n + `"`
 				}
 			}
-			disps[i].namesStr = strings.Join(names, " ")
-			if len(disps[i].namesStr) > maxNamesLen {
-				maxNamesLen = len(disps[i].namesStr)
-			}
-			if showCPU {
-				disps[i].cpuStr = formatCPU(r.cpu)
-				if len(disps[i].cpuStr) > maxCPULen {
-					maxCPULen = len(disps[i].cpuStr)
-				}
-			}
-			if showGPU {
-				disps[i].gpuDedStr = commasF(mb(r.gpuDed))
-				if len(disps[i].gpuDedStr) > maxGPUDedLen {
-					maxGPUDedLen = len(disps[i].gpuDedStr)
-				}
-				disps[i].gpuShrStr = commasF(mb(r.gpuShr))
-				if len(disps[i].gpuShrStr) > maxGPUShrLen {
-					maxGPUShrLen = len(disps[i].gpuShrStr)
-				}
-			}
-		}
-
-		if !showCPU && !showGPU {
-			fmt.Printf("%s  Names\n", lines[0])
-			for i := range rows {
-				fmt.Printf("%s  %s\n", lines[i+1], disps[i].namesStr)
-			}
-		} else {
-			var header bytes.Buffer
-			fmt.Fprintf(&header, "%s  %-*s", lines[0], maxNamesLen, "Names")
-			if showCPU {
-				fmt.Fprintf(&header, "  %*s", maxCPULen, "CPU Time")
-			}
-			if showGPU {
-				fmt.Fprintf(&header, "  %*s  %*s", maxGPUDedLen, "GPU Ded", maxGPUShrLen, "GPU Shr")
-			}
-			fmt.Println(header.String())
-
-			for i := range rows {
-				var rowBuf bytes.Buffer
-				fmt.Fprintf(&rowBuf, "%s  %-*s", lines[i+1], maxNamesLen, disps[i].namesStr)
-				if showCPU {
-					fmt.Fprintf(&rowBuf, "  %*s", maxCPULen, disps[i].cpuStr)
-				}
-				if showGPU {
-					fmt.Fprintf(&rowBuf, "  %*s  %*s", maxGPUDedLen, disps[i].gpuDedStr, maxGPUShrLen, disps[i].gpuShrStr)
-				}
-				fmt.Println(rowBuf.String())
-			}
+			fmt.Printf("%s  %s\n", lines[i+1], strings.Join(names, " "))
 		}
 	}
 
