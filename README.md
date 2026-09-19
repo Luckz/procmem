@@ -23,15 +23,16 @@ C:\> procmem notepad
 ## Usage
 
 ```
-procmem [/a | /ec | /f] [/e] [/s] <name>...
+procmem [/a | /ec | /f] [/e] [/cpu] [/s] <name>...
 
-  /a  /all       count all descendants regardless of name (default)
+  /a   /all      count all descendants regardless of name (default)
   /ec            exact root name (implies /e); count only descendants
                  named exactly like the root
-  /f  /flat      one row per matching process; no grouping, no rollup
-  /e  /exact     <name> is an exact process name, .exe suffix optional
-  /s  /short     omit the Names column
-  /h  /?  /help  show this help
+  /f   /flat     one row per matching process; no grouping, no rollup
+  /e   /exact    <name> is an exact process name, .exe suffix optional
+  /cpu /c        show total CPU time (User + Kernel)
+  /s   /short    omit the Names column
+  /h   /?  /help show this help
 ```
 
 Options are case-insensitive and can be combined, e.g.
@@ -54,8 +55,10 @@ for quick access from any Command Prompt or PowerShell window.
   processes like `System` or `Registry`).
 - `/ec steam` — implies `/e` and additionally counts only descendants
   named exactly like the root: exactly one `steam.exe`, alone.
-- `/f steam` — flat listing: every matching process as its own row, no
+- `/f discord` — flat listing: every matching process as its own row, no
   grouping and no descendant rollup.
+- `/cpu firefox` (or `/c`) — appends a `CPU Time` column reporting total
+  execution time (user + kernel across all threads) formatted as `[D:]HH:MM:SS`.
 - `chrome steam` — matches any process whose name matches either query;
   roots are aggregated and sorted together into a single table.
 
@@ -72,7 +75,8 @@ trees attached to their true topmost ancestor.
 | Procs | number of processes counted in the group |
 | RAM MB | private working set of the group, in MiB (Task Manager's default "Memory" column) |
 | Commit MB | commit charge of the group (psapi `PagefileUsage` = Task Manager's "Commit size") |
-| Names | unique process names in the group (hidden by `/s`); names with spaces are quoted |
+| Names | unique process names in the group (hidden by `/s`), with the root name listed first; names with spaces are quoted |
+| CPU Time | (optional: `/cpu` or `/c`) total CPU execution time across all threads in `[D:]HH:MM:SS` |
 
 Rows are sorted by commit, highest first.
 

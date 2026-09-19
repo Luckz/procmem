@@ -5,7 +5,8 @@ lives in [README.md](README.md).
 
 procmem groups every process matching the input under its topmost matching
 ancestor (the "root instance") and prints per-group RAM (working set) and
-commit (PagefileUsage) totals plus the unique process names involved.
+commit (PagefileUsage) totals, plus unique process names involved (and
+optional additional metrics).
 
 ## Design decisions
 
@@ -40,15 +41,16 @@ commit (PagefileUsage) totals plus the unique process names involved.
   (exact vs substring). In tree mode, `rootOf` walks up ancestors matching
   *any* of the queries (Option A: shared root group), preventing fragmented
   or duplicated subtrees if one queried process spawned another.
-- **Process names with spaces and pseudo-processes**: Names in the `Names`
-  column are quoted if they contain spaces (e.g. `"memory compression"` or
-  `"Epic Games Launcher.exe"`), preserving standard single-space token
-  separation without ambiguity. Under exact matching (`/e` or `/ec`),
-  suffix-less inputs match either `<name>.exe` or exact `<name>`, enabling
-  exact matching of extensionless Windows system pseudo-processes (`System`,
-  `Registry`).
+- **Process name ordering and quoting**: In the `Names` column, the root
+  process name is always listed first, followed by unique descendant names
+  sorted alphabetically. Names containing spaces (e.g. `"memory compression"`
+  or `"Epic Games Launcher.exe"`) are quoted, preserving standard
+  single-space token separation without ambiguity. Under exact matching
+  (`/e` or `/ec`), suffix-less inputs match either `<name>.exe` or exact
+  `<name>`, enabling exact matching of extensionless Windows system
+  pseudo-processes (`System`, `Registry`).
 
-## Number semantics
+## Memory metrics & semantics
 
 - **Private Working Set (`WorkingSetPrivateSize`)**: Physical RAM holding
   private, non-shareable pages, matching Task Manager's default "Memory" column.
@@ -80,6 +82,13 @@ commit (PagefileUsage) totals plus the unique process names involved.
      `kernel32.dll`), so it still fails to answer how much memory killing the
      tree will actually release. Private Working Set provides ~98% of the
      practical truth with virtually zero overhead.
+
+## CPU time metrics
+
+- **CPU Time (`UserTime + KernelTime`)**: Total CPU execution time across all
+  threads of each process, queried directly from `SYSTEM_PROCESS_INFORMATION`.
+  When rolled up across a tree, it represents aggregate CPU consumption. Formatted
+  as `[D:]HH:MM:SS` (hours zero-padded, days prefixed only when $\ge 24$ hours).
 
 ## Windows API architecture (why the code looks like this)
 

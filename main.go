@@ -15,14 +15,15 @@
 // restricts descendants to the root's exact name; anything else, including
 // an explicit *, matches by substring.
 //
-// Usage: procmem [/a | /ec | /f] [/e] [/s] <name>...
+// Usage: procmem [/a | /ec | /f] [/e] [/cpu] [/s] <name>...
 //
-//	/a  /all       count all descendants regardless of name (default)
+//	/a   /all      count all descendants regardless of name (default)
 //	/ec            exact root name (implies /e) and exact-name children
-//	/f  /flat      one row per matching process; no grouping, no rollup
-//	/e  /exact     input is an exact process name, .exe optional
-//	/s  /short     omit the Names column
-//	/h  /?  /help  show this help
+//	/f   /flat     one row per matching process; no grouping, no rollup
+//	/e   /exact    input is an exact process name, .exe optional
+//	/cpu /c        show total CPU time
+//	/s   /short    omit the Names column
+//	/h   /?  /help show this help
 package main
 
 import (
@@ -48,6 +49,7 @@ type procInfo struct {
 	created uint64 // creation time as comparable int64 FILETIME bits
 	ws      uint64 // total working set, bytes
 	commit  uint64 // PagefileUsage (= Task Manager "Commit size"), bytes
+	cpu     uint64 // total CPU time (UserTime + KernelTime) in 100ns units
 }
 
 // Input is an exact process name when forced via /e, or when it ends in
@@ -86,19 +88,20 @@ func parseName(raw string, forceExact bool) matcher {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /ec | /f] [/e] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
+	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /ec | /f] [/e] [/cpu] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
 	fmt.Fprint(w, "\nPer root instance of <name>: combined RAM (private working set =\n"+
 		"Task Manager \"Memory\") and commit (pagefile usage = Task Manager\n"+
 		"\"Commit size\") of that instance plus its descendant processes, with the\n"+
 		"unique process names they use.\n"+
 		"Multiple process names can be specified to query together.\n\n"+
-		"  /a  /all       count all descendants regardless of name (default)\n"+
+		"  /a   /all      count all descendants regardless of name (default)\n"+
 		"  /ec            exact root name (implies /e); count only descendants\n"+
 		"                 named exactly like the root\n"+
-		"  /f  /flat      one row per matching process; no grouping, no rollup\n"+
-		"  /e  /exact     <name> is an exact process name, .exe suffix optional\n"+
-		"  /s  /short     omit the Names column\n"+
-		"  /h  /?  /help  show this help\n\n"+
+		"  /f   /flat     one row per matching process; no grouping, no rollup\n"+
+		"  /e   /exact    <name> is an exact process name, .exe suffix optional\n"+
+		"  /cpu /c        show total CPU time (User + Kernel)\n"+
+		"  /s   /short    omit the Names column\n"+
+		"  /h   /?  /help show this help\n\n"+
 		"Matching: input ending in .exe is exact; anything else, or an explicit\n"+
 		"* (e.g. *team*), matches by substring.\n")
 }
@@ -110,6 +113,7 @@ func main() {
 		allKids    bool
 		flat       bool
 		short      bool
+		showCPU    bool
 		positional []string
 	)
 	for _, a := range os.Args[1:] {
@@ -122,6 +126,8 @@ func main() {
 			flat = true
 		case "/e", "/exact":
 			exactInput = true
+		case "/cpu", "/c":
+			showCPU = true
 		case "/s", "/short":
 			short = true
 		case "/h", "/?", "/help":
@@ -180,6 +186,7 @@ func main() {
 		root       uint32
 		procs      int
 		ws, commit uint64
+		cpu        uint64
 		names      map[string]bool
 	}
 	var rows []row
@@ -192,6 +199,7 @@ func main() {
 			r.root = pid
 			r.names = map[string]bool{strings.ToLower(procs[pid].name): true}
 			r.ws, r.commit, r.procs = procs[pid].ws, procs[pid].commit, 1
+			r.cpu = procs[pid].cpu
 			rows = append(rows, r)
 		}
 	} else {
@@ -278,6 +286,7 @@ func main() {
 				}
 				r.ws += procs[pid].ws
 				r.commit += procs[pid].commit
+				r.cpu += procs[pid].cpu
 				r.procs++
 				stack = append(stack, kids[pid]...)
 			}
@@ -295,17 +304,49 @@ func main() {
 
 	var numBuf bytes.Buffer
 	w := tabwriter.NewWriter(&numBuf, 0, 0, 2, ' ', tabwriter.AlignRight)
-	if flat {
-		fmt.Fprintln(w, "PID\tRAM MB\tCommit MB\t")
-	} else {
-		fmt.Fprintln(w, "RootPID\tProcs\tRAM MB\tCommit MB\t")
-	}
-	for _, r := range rows {
-		ram, commit := commasF(mb(r.ws)), commasF(mb(r.commit))
+	if short {
 		if flat {
-			fmt.Fprintf(w, "%d\t%s\t%s\t\n", r.root, ram, commit)
+			if showCPU {
+				fmt.Fprintln(w, "PID\tRAM MB\tCommit MB\tCPU Time\t")
+			} else {
+				fmt.Fprintln(w, "PID\tRAM MB\tCommit MB\t")
+			}
 		} else {
-			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t\n", r.root, commasI(r.procs), ram, commit)
+			if showCPU {
+				fmt.Fprintln(w, "RootPID\tProcs\tRAM MB\tCommit MB\tCPU Time\t")
+			} else {
+				fmt.Fprintln(w, "RootPID\tProcs\tRAM MB\tCommit MB\t")
+			}
+		}
+		for _, r := range rows {
+			ram, commit := commasF(mb(r.ws)), commasF(mb(r.commit))
+			if flat {
+				if showCPU {
+					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t\n", r.root, ram, commit, formatCPU(r.cpu))
+				} else {
+					fmt.Fprintf(w, "%d\t%s\t%s\t\n", r.root, ram, commit)
+				}
+			} else {
+				if showCPU {
+					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t\n", r.root, commasI(r.procs), ram, commit, formatCPU(r.cpu))
+				} else {
+					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t\n", r.root, commasI(r.procs), ram, commit)
+				}
+			}
+		}
+	} else {
+		if flat {
+			fmt.Fprintln(w, "PID\tRAM MB\tCommit MB\t")
+		} else {
+			fmt.Fprintln(w, "RootPID\tProcs\tRAM MB\tCommit MB\t")
+		}
+		for _, r := range rows {
+			ram, commit := commasF(mb(r.ws)), commasF(mb(r.commit))
+			if flat {
+				fmt.Fprintf(w, "%d\t%s\t%s\t\n", r.root, ram, commit)
+			} else {
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t\n", r.root, commasI(r.procs), ram, commit)
+			}
 		}
 	}
 	w.Flush()
@@ -316,7 +357,13 @@ func main() {
 			fmt.Println(line)
 		}
 	} else {
-		fmt.Printf("%s  Names\n", lines[0])
+		type rowDisp struct {
+			namesStr string
+			cpuStr   string
+		}
+		disps := make([]rowDisp, len(rows))
+		maxNamesLen := len("Names")
+		maxCPULen := len("CPU Time")
 		for i, r := range rows {
 			rootName := strings.ToLower(procs[r.root].name)
 			var otherNames []string
@@ -336,23 +383,49 @@ func main() {
 					names[j] = `"` + n + `"`
 				}
 			}
-			fmt.Printf("%s  %s\n", lines[i+1], strings.Join(names, " "))
+			disps[i].namesStr = strings.Join(names, " ")
+			if len(disps[i].namesStr) > maxNamesLen {
+				maxNamesLen = len(disps[i].namesStr)
+			}
+			if showCPU {
+				disps[i].cpuStr = formatCPU(r.cpu)
+				if len(disps[i].cpuStr) > maxCPULen {
+					maxCPULen = len(disps[i].cpuStr)
+				}
+			}
+		}
+
+		if showCPU {
+			fmt.Printf("%s  %-*s  %*s\n", lines[0], maxNamesLen, "Names", maxCPULen, "CPU Time")
+			for i := range rows {
+				fmt.Printf("%s  %-*s  %*s\n", lines[i+1], maxNamesLen, disps[i].namesStr, maxCPULen, disps[i].cpuStr)
+			}
+		} else {
+			fmt.Printf("%s  Names\n", lines[0])
+			for i := range rows {
+				fmt.Printf("%s  %s\n", lines[i+1], disps[i].namesStr)
+			}
 		}
 	}
 
 	var totProcs int
-	var totWS, totCommit uint64
+	var totWS, totCommit, totCPU uint64
 	for _, r := range rows {
 		totProcs += r.procs
 		totWS += r.ws
 		totCommit += r.commit
+		totCPU += r.cpu
+	}
+	cpuSummary := ""
+	if showCPU {
+		cpuSummary = fmt.Sprintf(", CPU %s", formatCPU(totCPU))
 	}
 	if flat {
-		fmt.Printf("=> %s process(es) matching '%s': RAM %s MB, commit %s MB\n",
-			commasI(totProcs), targetStr, commasF(mb(totWS)), commasF(mb(totCommit)))
+		fmt.Printf("=> %s process(es) matching '%s': RAM %s MB, commit %s MB%s\n",
+			commasI(totProcs), targetStr, commasF(mb(totWS)), commasF(mb(totCommit)), cpuSummary)
 	} else {
-		fmt.Printf("=> %d root(s), %s process(es) matching '%s': RAM %s MB, commit %s MB\n",
-			len(rows), commasI(totProcs), targetStr, commasF(mb(totWS)), commasF(mb(totCommit)))
+		fmt.Printf("=> %d root(s), %s process(es) matching '%s': RAM %s MB, commit %s MB%s\n",
+			len(rows), commasI(totProcs), targetStr, commasF(mb(totWS)), commasF(mb(totCommit)), cpuSummary)
 	}
 }
 
@@ -438,16 +511,38 @@ func snapshot() (map[uint32]procInfo, error) {
 		if spi.WorkingSetPrivateSize > 0 {
 			ws = uint64(spi.WorkingSetPrivateSize)
 		}
+		var cpu uint64
+		if spi.UserTime > 0 {
+			cpu += uint64(spi.UserTime)
+		}
+		if spi.KernelTime > 0 {
+			cpu += uint64(spi.KernelTime)
+		}
 		procs[uint32(spi.UniqueProcessID)] = procInfo{
 			ppid:    uint32(spi.InheritedFromUniqueProcessID),
 			name:    name,
 			created: uint64(spi.CreateTime),
 			ws:      ws,
 			commit:  uint64(spi.PagefileUsage),
+			cpu:     cpu,
 		}
 		if spi.NextEntryOffset == 0 {
 			return procs, nil
 		}
 		off += uintptr(spi.NextEntryOffset)
 	}
+}
+
+// formatCPU formats a duration in 100ns ticks into [D:]HH:MM:SS, where hours
+// are always zero-padded, and days (D:) are only included when >= 24 hours.
+func formatCPU(ticks uint64) string {
+	sec := ticks / 10000000
+	s := sec % 60
+	m := (sec / 60) % 60
+	h := (sec / 3600) % 24
+	d := sec / 86400
+	if d > 0 {
+		return fmt.Sprintf("%d:%02d:%02d:%02d", d, h, m, s)
+	}
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
