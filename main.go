@@ -15,14 +15,14 @@
 // restricts descendants to the root's exact name; anything else, including
 // an explicit *, matches by substring.
 //
-// Usage: procmem [/a | /ec | /f] [/e] [/cpu] [/gpu] [/s] <name>...
+// Usage: procmem [/a | /x | /f] [/e] [/c] [/g] [/s] <name>...
 //
 //	/a   /all      count all descendants regardless of name (default)
-//	/ec            exact root name (implies /e) and exact-name children
+//	/x   /strict   eXact tree: exact root (implies /e) and exact-name children
 //	/f   /flat     one row per matching process; no grouping, no rollup
 //	/e   /exact    input is an exact process name, .exe optional
-//	/cpu /c        show total CPU time
-//	/gpu /g        show Dedicated and Shared GPU memory
+//	/c   /cpu      show total CPU time
+//	/g   /gpu      show Dedicated and Shared GPU memory
 //	/s   /short    omit the Names column
 //	/h   /?  /help show this help
 package main
@@ -91,21 +91,21 @@ func parseName(raw string, forceExact bool) matcher {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /ec | /f] [/e] [/cpu] [/gpu] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
+	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /x | /f] [/e] [/c] [/g] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
 	fmt.Fprint(w, "\nPer root instance of <name>: combined RAM (private working set =\n"+
 		"Task Manager \"Memory\") and commit (pagefile usage = Task Manager\n"+
 		"\"Commit size\") of that instance plus its descendant processes, with the\n"+
 		"unique process names they use.\n"+
 		"Multiple process names can be specified to query together.\n\n"+
-		"  /a   /all      count all descendants regardless of name (default)\n"+
-		"  /ec            exact root name (implies /e); count only descendants\n"+
-		"                 named exactly like the root\n"+
-		"  /f   /flat     one row per matching process; no grouping, no rollup\n"+
-		"  /e   /exact    <name> is an exact process name, .exe suffix optional\n"+
-		"  /cpu /c        show total CPU time (User + Kernel)\n"+
-		"  /gpu /g        show Dedicated and Shared GPU memory\n"+
-		"  /s   /short    omit the Names column\n"+
-		"  /h   /?  /help show this help\n\n"+
+		"  /a   /all          count all descendants regardless of name (default)\n"+
+		"  /x   /strict       eXact tree: exact root (implies /e) and exact-name children\n"+
+		"  /f   /flat         one row per matching process; no grouping, no rollup\n"+
+		"  /e   /exact        <name> is an exact process name, .exe suffix optional\n"+
+		"  /c   /cpu          show total CPU time (User + Kernel)\n"+
+		"  /g   /gpu          show Dedicated and Shared GPU memory\n"+
+		"  /s   /short        omit the Names column\n"+
+		"  /h   /?   /help    show this help\n\n"+
+		"Options can use Windows /flag, Unix -flag / --flag, and bundling (e.g. -cg, -cgs).\n"+
 		"Matching: input ending in .exe is exact; anything else, or an explicit\n"+
 		"* (e.g. *team*), matches by substring.\n")
 }
@@ -121,37 +121,101 @@ func main() {
 		showGPU    bool
 		positional []string
 	)
-	for _, a := range os.Args[1:] {
-		switch strings.ToLower(a) {
-		case "/a", "/all":
+
+	applyShort := func(ch byte) bool {
+		switch ch | 0x20 {
+		case 'a':
 			allKids = true
-		case "/ec":
+		case 'x':
 			exactKids = true
-		case "/f", "/flat":
+		case 'f':
 			flat = true
-		case "/e", "/exact":
+		case 'e':
 			exactInput = true
-		case "/cpu", "/c":
+		case 'c':
 			showCPU = true
-		case "/gpu", "/g":
+		case 'g':
 			showGPU = true
-		case "/s", "/short":
+		case 's':
 			short = true
-		case "/h", "/?", "/help":
+		case 'h', '?':
 			printUsage(os.Stdout)
-			return
+			os.Exit(0)
 		default:
-			if len(a) > 1 && strings.HasPrefix(a, "/") {
+			return false
+		}
+		return true
+	}
+
+	applyNamed := func(name string) bool {
+		switch strings.ToLower(name) {
+		case "a", "all":
+			allKids = true
+		case "x", "strict", "exact-tree", "ec":
+			exactKids = true
+		case "f", "flat":
+			flat = true
+		case "e", "exact":
+			exactInput = true
+		case "c", "cpu":
+			showCPU = true
+		case "g", "gpu":
+			showGPU = true
+		case "s", "short":
+			short = true
+		case "h", "?", "help":
+			printUsage(os.Stdout)
+			os.Exit(0)
+		default:
+			return false
+		}
+		return true
+	}
+
+	for _, a := range os.Args[1:] {
+		if a == "--" {
+			continue
+		}
+		if strings.HasPrefix(a, "--") && len(a) > 2 {
+			if !applyNamed(a[2:]) {
 				fmt.Fprintf(os.Stderr, "unknown option %s\n", a)
 				printUsage(os.Stderr)
 				os.Exit(2)
 			}
-			positional = append(positional, a)
+			continue
 		}
+		if strings.HasPrefix(a, "/") && len(a) > 1 {
+			if !applyNamed(a[1:]) {
+				fmt.Fprintf(os.Stderr, "unknown option %s\n", a)
+				printUsage(os.Stderr)
+				os.Exit(2)
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "-") && len(a) > 1 {
+			if applyNamed(a[1:]) {
+				continue
+			}
+			allValid := true
+			for i := 1; i < len(a); i++ {
+				if !applyShort(a[i]) {
+					allValid = false
+					break
+				}
+			}
+			if allValid {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "unknown option %s\n", a)
+			printUsage(os.Stderr)
+			os.Exit(2)
+		}
+		positional = append(positional, a)
 	}
-	// /a, /ec and /f are three exclusive traversal scopes.
+
+	// /a, /x and /f are three exclusive traversal scopes.
 	if (allKids && exactKids) || (allKids && flat) || (exactKids && flat) {
-		fmt.Fprintln(os.Stderr, "specify at most one of /a, /ec, /f")
+		fmt.Fprintln(os.Stderr, "specify at most one of /a, /x, /f")
 		os.Exit(2)
 	}
 	if len(positional) < 1 {
@@ -303,7 +367,7 @@ func main() {
 					continue
 				}
 				seen[pid] = true
-				// /ec: count and traverse only processes named exactly like
+				// /x /strict: count and traverse only processes named exactly like
 				// their root; differently-named children are cut points.
 				if exactKids && strings.ToLower(procs[pid].name) != rootName {
 					continue

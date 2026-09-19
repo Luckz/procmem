@@ -13,13 +13,13 @@ optional additional metrics).
 - **Traversal scopes — three mutually exclusive modes**: the default (and
   `/a /all`) counts the entire descendant subtree regardless of name — a
   game client without its webhelper tree, or a browser without its helper
-  children, is not a useful total. `/ec` restores same-name-only counting
-  with cut-point traversal (non-matching children are neither counted nor
-  traversed through) and implies exact input matching. `/f /flat` lists
-  each matching process as its own row: no upward grouping, no descendant
-  rollup, `PID` header, no `Procs` column.
+  children, is not a useful total. `/x /strict` (eXact tree) restores
+  same-name-only counting with cut-point traversal (non-matching children
+  are neither counted nor traversed through) and implies exact input matching.
+  `/f /flat` lists each matching process as its own row: no upward grouping, no
+  descendant rollup, `PID` header, no `Procs` column.
 - **Substring matching is the default input mode.** A `.exe` suffix, `/e`
-  or `/ec` opt into exact matching; an explicit `*` opts back out. In fuzzy
+  or `/x` opt into exact matching; an explicit `*` opts back out. In fuzzy
   mode `*` characters and a trailing `.exe` are stripped before the
   substring match, so `*team*` matches `steam.exe` and would match a
   hypothetical `ms-teams.exe`.
@@ -46,7 +46,7 @@ optional additional metrics).
   sorted alphabetically. Names containing spaces (e.g. `"memory compression"`
   or `"Epic Games Launcher.exe"`) are quoted, preserving standard
   single-space token separation without ambiguity. Under exact matching
-  (`/e` or `/ec`), suffix-less inputs match either `<name>.exe` or exact
+  (`/e` or `/x`), suffix-less inputs match either `<name>.exe` or exact
   `<name>`, enabling exact matching of extensionless Windows system
   pseudo-processes (`System`, `Registry`).
 

@@ -23,22 +23,23 @@ C:\> procmem notepad
 ## Usage
 
 ```
-procmem [/a | /ec | /f] [/e] [/cpu] [/gpu] [/s] <name>...
+procmem [/a | /x | /f] [/e] [/c] [/g] [/s] <name>...
 
   /a   /all      count all descendants regardless of name (default)
-  /ec            exact root name (implies /e); count only descendants
+  /x   /strict   eXact tree (implies /e); count only descendants
                  named exactly like the root
   /f   /flat     one row per matching process; no grouping, no rollup
   /e   /exact    <name> is an exact process name, .exe suffix optional
-  /cpu /c        show total CPU time (User + Kernel)
-  /gpu /g        show Dedicated and Shared GPU memory
+  /c   /cpu      show total CPU time (User + Kernel)
+  /g   /gpu      show Dedicated and Shared GPU memory
   /s   /short    omit the Names column
   /h   /?  /help show this help
 ```
 
-Options are case-insensitive and can be combined, e.g.
-`procmem /s /ec chrome.exe`. Multiple process names can be provided to
-query several targets together, e.g. `procmem brave chrome msedge`.
+Options can use Windows slashes (`/flag`), Unix hyphens (`-flag`, `--flag`),
+and short-flag bundling (e.g. `-cgs`, `-xcg`). Multiple process
+names can be provided to query several targets together, e.g.
+`procmem brave chrome msedge`.
 
 Copy `procmem.exe` to a folder in your `%PATH%` (e.g. `%USERPROFILE%\.local\bin\`)
 for quick access from any Command Prompt or PowerShell window.
@@ -54,9 +55,9 @@ for quick access from any Command Prompt or PowerShell window.
 - `/e steam` — force exact matching for suffix-less input (`.exe` is
   matched or appended automatically, also matching extensionless system
   processes like `System` or `Registry`).
-- `/ec explorer` — implies `/e` and additionally counts only descendants
-  named exactly like the root: counts `explorer.exe` instances alone,
-  ignoring differently-named child processes.
+- `/x explorer` (or `/strict`) — eXact tree: implies `/e` and counts only
+  descendants named exactly like the root: counts `explorer.exe` instances
+  alone, ignoring differently-named child processes.
 - `/f discord` — flat listing: every matching process as its own row, no
   grouping and no descendant rollup.
 - `/cpu firefox` (or `/c`) — appends a `CPU Time` column reporting total
@@ -106,7 +107,7 @@ Two things to know about the numbers:
 |---|---|
 | 0 | success (including `/h`) |
 | 1 | process snapshot failed, or nothing matched |
-| 2 | usage error (unknown option, more than one of `/a` `/ec` `/f`, wrong argument count) |
+| 2 | usage error (unknown option, more than one of `/a` `/x` `/f`, wrong argument count) |
 
 ## Notes & limitations
 
