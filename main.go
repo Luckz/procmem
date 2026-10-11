@@ -121,6 +121,25 @@ func rootOf(procs map[uint32]procInfo, pid uint32, matches func(string) bool) ui
 	return cur
 }
 
+// buildKids maps each parent PID to its children. Edges where the recorded
+// parent cannot be the real parent are dropped: a PID reused after the child
+// was created leaves a "parent" whose creation time is later than the
+// child's, and that child belongs to no tree in this snapshot.
+func buildKids(procs map[uint32]procInfo) map[uint32][]uint32 {
+	kids := map[uint32][]uint32{}
+	for pid, p := range procs {
+		parent, ok := procs[p.ppid]
+		if !ok || p.ppid == pid {
+			continue
+		}
+		if pt, ct := parent.created, p.created; pt != 0 && ct != 0 && pt > ct {
+			continue
+		}
+		kids[p.ppid] = append(kids[p.ppid], pid)
+	}
+	return kids
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /x | /f] [/e] [/c] [/g] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
 	fmt.Fprintf(w, "       %s /kill [/f] [/e] [/g] [/s] <name|PID>...\n", filepath.Base(os.Args[0]))
@@ -388,12 +407,7 @@ func main() {
 			rows = append(rows, r)
 		}
 	} else {
-		kids := map[uint32][]uint32{}
-		for pid, p := range procs {
-			if _, ok := procs[p.ppid]; ok && p.ppid != pid {
-				kids[p.ppid] = append(kids[p.ppid], pid)
-			}
-		}
+		kids := buildKids(procs)
 
 		roots := map[uint32]bool{}
 		for _, pid := range matched {
@@ -596,12 +610,7 @@ func runKill(
 		targets = append(targets, targetItem{raw: raw, isPID: false, matcher: m})
 	}
 
-	kids := map[uint32][]uint32{}
-	for pid, p := range procs {
-		if _, ok := procs[p.ppid]; ok && p.ppid != pid {
-			kids[p.ppid] = append(kids[p.ppid], pid)
-		}
-	}
+	kids := buildKids(procs)
 
 	if showGPU {
 		gpuDed, gpuShr, err := queryGPUMemory()
@@ -839,9 +848,6 @@ func runKill(
 						if seenTree[child] {
 							continue
 						}
-						if pt, ct := procs[curr].created, procs[child].created; pt != 0 && ct != 0 && pt > ct {
-							continue
-						}
 						if exactKids && strings.ToLower(procs[child].name) != currName {
 							continue
 						}
@@ -1017,9 +1023,6 @@ func runKill(
 				currName := strings.ToLower(procs[curr].name)
 				for _, child := range kids[curr] {
 					if seenKill[child] {
-						continue
-					}
-					if pt, ct := procs[curr].created, procs[child].created; pt != 0 && ct != 0 && pt > ct {
 						continue
 					}
 					if exactKids && strings.ToLower(procs[child].name) != currName {

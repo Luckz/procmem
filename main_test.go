@@ -149,3 +149,25 @@ func TestRootOf(t *testing.T) {
 	}
 }
 
+func TestBuildKidsDropsStaleParentEdges(t *testing.T) {
+	procs := map[uint32]procInfo{
+		1:   {ppid: 0, name: "System", created: 100},
+		100: {ppid: 1, name: "game.exe", created: 2000},
+		// Reused PID: this process predates the PID it points at, so it is
+		// not a child of 100.
+		101: {ppid: 100, name: "orphan.exe", created: 1000},
+	}
+	kids := buildKids(procs)
+	for _, pid := range kids[100] {
+		if pid == 101 {
+			t.Error("buildKids must drop an edge whose parent was created after the child")
+		}
+	}
+	// A child created after its parent is a real edge.
+	procs[102] = procInfo{ppid: 100, name: "real.exe", created: 3000}
+	if kids := buildKids(procs); len(kids[100]) != 1 || kids[100][0] != 102 {
+		t.Errorf("buildKids dropped a valid edge: %v", kids[100])
+	}
+}
+
+
