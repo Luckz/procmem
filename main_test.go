@@ -111,3 +111,41 @@ func TestCommas(t *testing.T) {
 		t.Errorf("mb(1 GiB) = %v, want 1024", got)
 	}
 }
+
+func nameMatcher(name string) func(string) bool {
+	m := parseName(name, false)
+	return m.matches
+}
+
+func TestRootOf(t *testing.T) {
+	procs := map[uint32]procInfo{
+		0:   {ppid: 0, name: "System Idle Process", created: 0},
+		1:   {ppid: 0, name: "System", created: 100},
+		100: {ppid: 1, name: "parent.exe", created: 200},
+		101: {ppid: 100, name: "child.exe", created: 300},
+		102: {ppid: 101, name: "grandchild.exe", created: 400},
+		// Stale parent:
+		200: {ppid: 1, name: "newparent.exe", created: 5000},
+		201: {ppid: 200, name: "oldchild.exe", created: 1000},
+	}
+
+	mParent := nameMatcher("parent.exe")
+	if r := rootOf(procs, 102, mParent); r != 102 {
+		t.Errorf("rootOf grandchild without matching middle ancestor = %d, want 102", r)
+	}
+
+	mChain := func(name string) bool { return name != "System Idle Process" }
+	if r := rootOf(procs, 102, mChain); r != 1 {
+		t.Errorf("rootOf climbing all matching ancestors = %d, want 1", r)
+	}
+
+	mAny := func(name string) bool { return true }
+	if r := rootOf(procs, 201, mAny); r != 201 {
+		t.Errorf("rootOf must stop at PID-reuse boundary: got %d, want 201", r)
+	}
+
+	if r := rootOf(procs, 0, mAny); r != 0 {
+		t.Errorf("rootOf self-parent PID 0 must return 0 immediately: got %d", r)
+	}
+}
+

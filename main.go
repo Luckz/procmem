@@ -99,6 +99,28 @@ func parseName(raw string, forceExact bool) matcher {
 	}
 }
 
+// rootOf returns the topmost ancestor of pid whose own name also matches.
+// Stops if the parent is gone, does not match, or looks like PID reuse (a
+// "parent" created after the child cannot be its real parent).
+func rootOf(procs map[uint32]procInfo, pid uint32, matches func(string) bool) uint32 {
+	cur := pid
+	for range 128 {
+		ppid := procs[cur].ppid
+		if ppid == cur {
+			return cur
+		}
+		parent, ok := procs[ppid]
+		if !ok || !matches(parent.name) {
+			return cur
+		}
+		if pt, ct := parent.created, procs[cur].created; pt != 0 && ct != 0 && pt > ct {
+			return cur
+		}
+		cur = ppid
+	}
+	return cur
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /x | /f] [/e] [/c] [/g] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
 	fmt.Fprintf(w, "       %s /kill [/f] [/e] [/g] [/s] <name|PID>...\n", filepath.Base(os.Args[0]))
@@ -373,28 +395,9 @@ func main() {
 			}
 		}
 
-		// Topmost ancestor whose own name also matches the input. Stops if
-		// the parent is gone, does not match, or looks like PID reuse (a
-		// "parent" created after the child cannot be its real parent).
-		rootOf := func(pid uint32) uint32 {
-			cur := pid
-			for i := 0; i < 128; i++ {
-				ppid := procs[cur].ppid
-				parent, ok := procs[ppid]
-				if !ok || !matches(parent.name) {
-					return cur
-				}
-				if pt, ct := parent.created, procs[cur].created; pt != 0 && ct != 0 && pt > ct {
-					return cur
-				}
-				cur = ppid
-			}
-			return cur
-		}
-
 		roots := map[uint32]bool{}
 		for _, pid := range matched {
-			roots[rootOf(pid)] = true
+			roots[rootOf(procs, pid, matches)] = true
 		}
 
 		// Prune any root that is already traversed as a descendant of another
@@ -775,22 +778,6 @@ func runKill(
 			os.Exit(2)
 		} else {
 			// Tree preview
-			rootOf := func(pid uint32, m matcher) uint32 {
-				cur := pid
-				for i := 0; i < 128; i++ {
-					ppid := procs[cur].ppid
-					parent, ok := procs[ppid]
-					if !ok || !m.matches(parent.name) {
-						return cur
-					}
-					if pt, ct := parent.created, procs[cur].created; pt != 0 && ct != 0 && pt > ct {
-						return cur
-					}
-					cur = ppid
-				}
-				return cur
-			}
-
 			var roots []uint32
 			seenRoots := make(map[uint32]bool)
 			for _, t := range targets {
@@ -804,7 +791,7 @@ func runKill(
 			for pid, p := range procs {
 				for _, t := range targets {
 					if !t.isPID && t.matcher.matches(p.name) {
-						r := rootOf(pid, t.matcher)
+						r := rootOf(procs, pid, t.matcher.matches)
 						if !seenRoots[r] {
 							seenRoots[r] = true
 							roots = append(roots, r)
@@ -1022,22 +1009,6 @@ func runKill(
 			}
 		}
 	} else {
-		rootOf := func(pid uint32, m matcher) uint32 {
-			cur := pid
-			for i := 0; i < 128; i++ {
-				ppid := procs[cur].ppid
-				parent, ok := procs[ppid]
-				if !ok || !m.matches(parent.name) {
-					return cur
-				}
-				if pt, ct := parent.created, procs[cur].created; pt != 0 && ct != 0 && pt > ct {
-					return cur
-				}
-				cur = ppid
-			}
-			return cur
-		}
-
 		collectTree := func(root uint32) {
 			queue := []uint32{root}
 			for i := 0; i < len(queue); i++ {
@@ -1072,7 +1043,7 @@ func runKill(
 				seenRoots := make(map[uint32]bool)
 				for pid, p := range procs {
 					if t.matcher.matches(p.name) {
-						r := rootOf(pid, t.matcher)
+						r := rootOf(procs, pid, t.matcher.matches)
 						if !seenRoots[r] {
 							seenRoots[r] = true
 							roots = append(roots, r)
