@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [Unreleased]
+
+### Fixed
+- **PID reuse in query mode**: Descendant aggregation and root pruning no
+  longer attach a process whose recorded parent PID was created *after* the
+  process itself. Previously only the upward root walk and the termination
+  paths applied the creation-time guard, so a recycled PID could pull an
+  unrelated process into a tree and inflate the reported RAM and commit
+  totals.
+
+### Changed
+- **Single child map**: Both query mode and the termination paths now build
+  the parent-to-children map through one `buildKids` helper, unifying tree
+  construction across the three traversal paths (query aggregation, kill
+  preview, and `collectTree`) and removing two redundant inline creation-time checks.
+- **Tests**: Added `main_test.go` covering name parsing and matching, CPU
+  time and number formatting, and the grouping logic (rollup, `/x` cut
+  points, nested-root pruning, PID-reuse exclusion, `/f` flat mode) on
+  synthetic process tables. `make.bat` now runs `go test .` so the suite gates
+  every build.
+
 ## [1.2.0] - 2026-09-19
 
 ### Added

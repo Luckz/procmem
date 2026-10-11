@@ -26,8 +26,13 @@ optional additional metrics).
 - **Root selection**: topmost ancestor whose own name also matches the
   input. Parent PIDs and creation times are obtained directly from the kernel
   process snapshot; the guard stops the upward walk when the recorded parent
-  was created *after* the child (a reused PID cannot be the real parent). A
-  seen-set plus a 128-step cap protect against cycles and pathological chains.
+  was created *after* the child (a reused PID cannot be the real parent). The
+  same guard applies to downward traversal: `buildKids` drops every edge whose
+  recorded parent was created after the child, in query mode as well as in
+  both termination paths, so a recycled PID can never attach an unrelated
+  process to a tree. A 128-step cap protects against cycles and
+  pathological chains during upward root traversal; downward descendant
+  traversal uses a seen-set.
   Additionally, any root that is reachable as a descendant of another root
   under the active traversal mode is pruned, preventing double-counting when
   a matching process sits under a non-matching intermediate.
