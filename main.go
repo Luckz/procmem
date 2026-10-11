@@ -140,6 +140,129 @@ func buildKids(procs map[uint32]procInfo) map[uint32][]uint32 {
 	return kids
 }
 
+// procRow is one reported group: a root instance (or, in /flat mode, a single
+// matching process) with the metrics rolled up over the processes it covers
+// and the lowercased names involved.
+type procRow struct {
+	root           uint32
+	procs          int
+	ws, commit     uint64
+	cpu            uint64
+	gpuDed, gpuShr uint64
+	names          map[string]bool
+}
+
+// buildRows groups the matched processes under their topmost matching
+// ancestor and rolls up each root plus its descendants. Rows are sorted by
+// descending commit, then ascending root PID.
+func buildRows(procs map[uint32]procInfo, matched []uint32, matches func(string) bool, flat, exactKids, short bool) []procRow {
+	var rows []procRow
+
+	if flat {
+		// /f: one row per matching process; no upward grouping and no
+		// descendant rollup.
+		for _, pid := range matched {
+			r := procRow{
+				root:   pid,
+				procs:  1,
+				ws:     procs[pid].ws,
+				commit: procs[pid].commit,
+				cpu:    procs[pid].cpu,
+				gpuDed: procs[pid].gpuDed,
+				gpuShr: procs[pid].gpuShr,
+			}
+			if !short {
+				r.names = map[string]bool{strings.ToLower(procs[pid].name): true}
+			}
+			rows = append(rows, r)
+		}
+		sortProcRows(rows)
+		return rows
+	}
+
+	kids := buildKids(procs)
+
+	roots := map[uint32]bool{}
+	for _, pid := range matched {
+		roots[rootOf(procs, pid, matches)] = true
+	}
+
+	// Prune any root that is already traversed as a descendant of another
+	// root (e.g. pattern A -> non-matching launcher -> pattern B).
+	pruned := map[uint32]bool{}
+	for r1 := range roots {
+		if pruned[r1] {
+			continue
+		}
+		stack := append([]uint32{}, kids[r1]...)
+		seen := map[uint32]bool{r1: true}
+		r1Name := strings.ToLower(procs[r1].name)
+		for len(stack) > 0 {
+			pid := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if seen[pid] {
+				continue
+			}
+			seen[pid] = true
+			if exactKids && strings.ToLower(procs[pid].name) != r1Name {
+				continue
+			}
+			if roots[pid] {
+				pruned[pid] = true
+			}
+			stack = append(stack, kids[pid]...)
+		}
+	}
+	for p := range pruned {
+		delete(roots, p)
+	}
+
+	for root := range roots {
+		var r procRow
+		r.names = map[string]bool{}
+		rootName := strings.ToLower(procs[root].name)
+		stack := []uint32{root}
+		seen := map[uint32]bool{}
+		for len(stack) > 0 {
+			pid := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if seen[pid] {
+				continue
+			}
+			seen[pid] = true
+			// /x /strict: count and traverse only processes named exactly like
+			// their root; differently-named children are cut points.
+			if exactKids && strings.ToLower(procs[pid].name) != rootName {
+				continue
+			}
+			if !short {
+				r.names[strings.ToLower(procs[pid].name)] = true
+			}
+			r.ws += procs[pid].ws
+			r.commit += procs[pid].commit
+			r.cpu += procs[pid].cpu
+			r.gpuDed += procs[pid].gpuDed
+			r.gpuShr += procs[pid].gpuShr
+			r.procs++
+			stack = append(stack, kids[pid]...)
+		}
+		r.root = root
+		rows = append(rows, r)
+	}
+
+	sortProcRows(rows)
+	return rows
+}
+
+func sortProcRows(rows []procRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].commit != rows[j].commit {
+			return rows[i].commit > rows[j].commit
+		}
+		return rows[i].root < rows[j].root
+	})
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "procmem %s\n\nUsage: %s [/a | /x | /f] [/e] [/c] [/g] [/s] <name>...\n", version, filepath.Base(os.Args[0]))
 	fmt.Fprintf(w, "       %s /kill [/f] [/e] [/g] [/s] <name|PID>...\n", filepath.Base(os.Args[0]))
@@ -383,106 +506,7 @@ func main() {
 		}
 	}
 
-	type row struct {
-		root           uint32
-		procs          int
-		ws, commit     uint64
-		cpu            uint64
-		gpuDed, gpuShr uint64
-		names          map[string]bool
-	}
-	var rows []row
-
-	if flat {
-		// /f: one row per matching process; no upward grouping and no
-		// descendant rollup.
-		for _, pid := range matched {
-			var r row
-			r.root = pid
-			r.names = map[string]bool{strings.ToLower(procs[pid].name): true}
-			r.ws, r.commit, r.procs = procs[pid].ws, procs[pid].commit, 1
-			r.cpu = procs[pid].cpu
-			r.gpuDed = procs[pid].gpuDed
-			r.gpuShr = procs[pid].gpuShr
-			rows = append(rows, r)
-		}
-	} else {
-		kids := buildKids(procs)
-
-		roots := map[uint32]bool{}
-		for _, pid := range matched {
-			roots[rootOf(procs, pid, matches)] = true
-		}
-
-		// Prune any root that is already traversed as a descendant of another
-		// root (e.g. pattern A -> non-matching launcher -> pattern B).
-		pruned := map[uint32]bool{}
-		for r1 := range roots {
-			if pruned[r1] {
-				continue
-			}
-			stack := append([]uint32{}, kids[r1]...)
-			seen := map[uint32]bool{}
-			for len(stack) > 0 {
-				pid := stack[len(stack)-1]
-				stack = stack[:len(stack)-1]
-				if seen[pid] {
-					continue
-				}
-				seen[pid] = true
-				if exactKids && strings.ToLower(procs[pid].name) != strings.ToLower(procs[r1].name) {
-					continue
-				}
-				if roots[pid] {
-					pruned[pid] = true
-				}
-				stack = append(stack, kids[pid]...)
-			}
-		}
-		for p := range pruned {
-			delete(roots, p)
-		}
-
-		for root := range roots {
-			var r row
-			r.names = map[string]bool{}
-			rootName := strings.ToLower(procs[root].name)
-			stack := []uint32{root}
-			seen := map[uint32]bool{}
-			for len(stack) > 0 {
-				pid := stack[len(stack)-1]
-				stack = stack[:len(stack)-1]
-				if seen[pid] {
-					continue
-				}
-				seen[pid] = true
-				// /x /strict: count and traverse only processes named exactly like
-				// their root; differently-named children are cut points.
-				if exactKids && strings.ToLower(procs[pid].name) != rootName {
-					continue
-				}
-				if !short {
-					r.names[strings.ToLower(procs[pid].name)] = true
-				}
-				r.ws += procs[pid].ws
-				r.commit += procs[pid].commit
-				r.cpu += procs[pid].cpu
-				r.gpuDed += procs[pid].gpuDed
-				r.gpuShr += procs[pid].gpuShr
-				r.procs++
-				stack = append(stack, kids[pid]...)
-			}
-			r.root = root
-			rows = append(rows, r)
-		}
-	}
-
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].commit != rows[j].commit {
-			return rows[i].commit > rows[j].commit
-		}
-		return rows[i].root < rows[j].root
-	})
+	rows := buildRows(procs, matched, matches, flat, exactKids, short)
 
 	var numBuf bytes.Buffer
 	w := tabwriter.NewWriter(&numBuf, 0, 0, 2, ' ', tabwriter.AlignRight)
